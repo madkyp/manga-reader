@@ -4,6 +4,7 @@
   import { open } from '@tauri-apps/plugin-dialog';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { invoke } from '@tauri-apps/api/core';
+  import { enable, disable, isEnabled } from '@tauri-apps/plugin-autostart';
 
   // cli:true → soporta control directo via CLI instalado
   const VPN_LIST = [
@@ -63,9 +64,6 @@
     await refreshVpnStatus(id);
   }
 
-  onMount(() => {
-    VPN_LIST.filter(v => v.cli).forEach(v => refreshVpnStatus(v.id));
-  });
 
   // ── Carga preferencias desde localStorage ────────────────────────────────
   function loadPrefs() {
@@ -125,6 +123,21 @@
   }
 
   const APP_VERSION = '0.1.0';
+
+  // ── Autostart ──────────────────────────────────────────────────────────────
+  let autostart = $state(false);
+
+  onMount(async () => {
+    VPN_LIST.filter(v => v.cli).forEach(v => refreshVpnStatus(v.id));
+    try { autostart = await isEnabled(); } catch {}
+  });
+
+  async function toggleAutostart() {
+    try {
+      if (autostart) { await disable(); autostart = false; }
+      else           { await enable();  autostart = true;  }
+    } catch {}
+  }
 </script>
 
 <div class="settings-wrap">
@@ -366,6 +379,30 @@
           </div>
         </div>
       {/each}
+    </section>
+
+    <!-- ── Sistema ───────────────────────────────────────────────────────── -->
+    <section class="section">
+      <h2 class="section-title">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+        Sistema
+      </h2>
+
+      <div class="row">
+        <div class="row-info">
+          <span class="row-label">Iniciar con Windows</span>
+          <span class="row-desc">Abre la app automáticamente al encender el PC</span>
+        </div>
+        <button
+          class="toggle"
+          class:on={autostart}
+          onclick={toggleAutostart}
+          aria-checked={autostart}
+          role="switch"
+        >
+          <span class="thumb"></span>
+        </button>
+      </div>
     </section>
 
     <!-- ── Acerca de ─────────────────────────────────────────────────────── -->

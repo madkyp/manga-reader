@@ -42,6 +42,7 @@ jobs:
         run: npm run tauri build -- --bundles nsis
         env:
           TAURI_SIGNING_PRIVATE_KEY: ""
+          TAURI_CONFIG: '{"bundle":{"resources":["binaries/ffmpeg.exe","binaries/ffprobe.exe"]}}'
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
