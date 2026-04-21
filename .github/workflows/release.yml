@@ -32,8 +32,8 @@ jobs:
           Expand-Archive -Path "ffmpeg.zip" -DestinationPath "ffmpeg-tmp"
           $bin = Get-ChildItem "ffmpeg-tmp" -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
           $probe = Get-ChildItem "ffmpeg-tmp" -Recurse -Filter "ffprobe.exe" | Select-Object -First 1
-          Copy-Item $bin.FullName "src-tauri/binaries/ffmpeg.exe"
-          Copy-Item $probe.FullName "src-tauri/binaries/ffprobe.exe"
+          Copy-Item $bin.FullName "src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe"
+          Copy-Item $probe.FullName "src-tauri/binaries/ffprobe-x86_64-pc-windows-msvc.exe"
 
       - name: Install dependencies
         run: npm ci
@@ -42,7 +42,7 @@ jobs:
         run: npm run tauri build -- --bundles nsis
         env:
           TAURI_SIGNING_PRIVATE_KEY: ""
-          TAURI_CONFIG: '{"bundle":{"resources":["binaries/ffmpeg.exe","binaries/ffprobe.exe"]}}'
+          TAURI_CONFIG: '{"bundle":{"externalBin":["binaries/ffmpeg","binaries/ffprobe"]}}'
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
