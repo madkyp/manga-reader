@@ -36,17 +36,14 @@ jobs:
           Copy-Item $bin.FullName   "src-tauri/binaries/ffmpeg.exe"
           Copy-Item $probe.FullName "src-tauri/binaries/ffprobe.exe"
           $ffmpegDir = (Resolve-Path "src-tauri/binaries").Path
-          $nsi = @"
-; Copia ffmpeg junto al ejecutable durante la instalacion
-!macro customInstall
-  SetOutPath "`$INSTDIR"
-  File "$ffmpegDir\ffmpeg.exe"
-  File "$ffmpegDir\ffprobe.exe"
-!macroend
-!macro customUnInstall
-!macroend
-"@
-          Set-Content -Path "src-tauri/nsis/extra.nsi" -Value $nsi -Encoding UTF8
+          $nsiPath = "src-tauri/nsis/extra.nsi"
+          "!macro customInstall"                              | Set-Content  $nsiPath -Encoding UTF8
+          "  SetOutPath `"`$INSTDIR`""                       | Add-Content  $nsiPath -Encoding UTF8
+          "  File `"$ffmpegDir\ffmpeg.exe`""                 | Add-Content  $nsiPath -Encoding UTF8
+          "  File `"$ffmpegDir\ffprobe.exe`""                | Add-Content  $nsiPath -Encoding UTF8
+          "!macroend"                                         | Add-Content  $nsiPath -Encoding UTF8
+          "!macro customUnInstall"                            | Add-Content  $nsiPath -Encoding UTF8
+          "!macroend"                                         | Add-Content  $nsiPath -Encoding UTF8
 
       - name: Install dependencies
         run: npm ci
