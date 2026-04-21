@@ -112,8 +112,8 @@ jobs:
           APPIMAGE=$(find src-tauri/target/release/bundle/appimage -name "*.AppImage" | head -1)
           echo "Patching $APPIMAGE"
 
-          # Extraer AppImage
-          $APPIMAGE --appimage-extract
+          # Extraer AppImage (comillas para manejar espacios en el nombre)
+          "$APPIMAGE" --appimage-extract
 
           # Copiar ffmpeg al AppDir
           cp src-tauri/binaries/ffmpeg  squashfs-root/usr/bin/ffmpeg
