@@ -13,16 +13,24 @@
   let fileInfo   = $state(null);
   let loadingFiles = $state(false);
 
-  const autoQuery = episodeNumber != null
-    ? `${animeTitle} ${String(episodeNumber).padStart(4, '0')}`
-    : animeTitle;
+  const epStr = episodeNumber != null ? String(episodeNumber) : null;
+  const epPadded = epStr != null
+    ? epStr.padStart(epStr.length <= 2 ? 2 : epStr.length <= 3 ? 3 : 4, '0')
+    : null;
+  const autoQuery = epPadded != null ? `${animeTitle} ${epPadded}` : animeTitle;
+
+  let manualQuery = $state(autoQuery);
 
   $effect(() => { search(autoQuery); });
 
   async function search(q) {
     loading = true; error = ''; results = []; selected = null; fileInfo = null;
     try {
-      const res = await tauri('nyaa_search', { query: q.trim(), category: '1_2' });
+      let res = await tauri('nyaa_search', { query: q.trim(), category: '1_2' });
+      // Si no hay resultados y la query incluye episodio, reintentar solo con el título
+      if (res.length === 0 && epPadded != null) {
+        res = await tauri('nyaa_search', { query: animeTitle.trim(), category: '1_2' });
+      }
       results = res;
       if (results.length === 0) error = 'Sin resultados en AnimeToSho para esta búsqueda.';
     } catch(e) {
@@ -80,6 +88,17 @@
         {#if episodeNumber != null}<span class="ep-badge">Ep. {episodeNumber}</span>{/if}
       </div>
       <button class="close-btn" onclick={onClose}>✕</button>
+    </div>
+
+    <div class="search-bar">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input
+        type="text"
+        bind:value={manualQuery}
+        onkeydown={(e) => e.key === 'Enter' && search(manualQuery)}
+        placeholder="Buscar torrents…"
+      />
+      <button onclick={() => search(manualQuery)}>Buscar</button>
     </div>
 
     <div class="body">
@@ -278,4 +297,23 @@
     animation: spin 0.7s linear infinite;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
+
+  .search-bar {
+    display: flex; align-items: center; gap: 6px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--outline-dim);
+    flex-shrink: 0;
+  }
+  .search-bar svg { width: 13px; height: 13px; color: var(--text-muted); flex-shrink: 0; }
+  .search-bar input {
+    flex: 1; background: var(--bg-card); border: 1px solid var(--outline);
+    border-radius: 6px; padding: 5px 8px;
+    color: var(--text); font-size: 11px; outline: none;
+  }
+  .search-bar input:focus { border-color: var(--primary); }
+  .search-bar button {
+    background: var(--primary); color: #000;
+    border: none; border-radius: 6px; padding: 5px 10px;
+    font-size: 11px; font-weight: 700; cursor: pointer; flex-shrink: 0;
+  }
 </style>
