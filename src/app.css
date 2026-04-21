@@ -1,0 +1,46 @@
+/* Variables de color — tema OlympusScans (navy + amber + sky) */
+:root {
+  --bg:           #020420; /* fondo principal — azul marino casi negro */
+  --bg-low:       #0a0e1f; /* fondo ligeramente más claro para contenedores */
+  --bg-card:      #0f1428; /* fondo de las cards */
+  --bg-card-high: #161b30; /* fondo de elementos elevados */
+  --surface:      #1e2535; /* superficie de modales / overlays */
+  --outline:      #475569; /* bordes y separadores */
+  --outline-dim:  #1e2535; /* bordes sutiles */
+
+  --primary:      #f59e0b; /* amber — color principal, botones, acentos */
+  --primary-dim:  #92600a; /* amber oscuro para hover */
+  --on-primary:   #1a0f00; /* texto sobre fondo amber */
+
+  --secondary:    #7dd3fc; /* sky blue — elementos secundarios */
+  --on-secondary: #00334d; /* texto sobre fondo sky */
+
+  --text:         #e2e8f0; /* texto principal */
+  --text-muted:   #94a3b8; /* texto secundario / subtítulos */
+
+  --green:        #4ade80; /* estado Activo */
+  --orange:       #fb923c; /* estado Pausado */
+  --red:          #f87171; /* estado Cancelado */
+  --gray:         #94a3b8; /* estado Finalizado / desconocido */
+}
+
+/* Reset y base */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  overflow: hidden; /* la app es fullscreen, el scroll lo gestionan los componentes */
+  user-select: none;
+}
+
+/* Scrollbar personalizada — fina y discreta */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--outline); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* Utilidades comunes */
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
