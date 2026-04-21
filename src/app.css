@@ -1,22 +1,22 @@
-/* Variables de color — tema OlympusScans (navy + amber + sky) */
+/* Variables de color — tema OlympusScans (navy + amber dorado) */
 :root {
-  --bg:           #020420; /* fondo principal — azul marino casi negro */
-  --bg-low:       #0a0e1f; /* fondo ligeramente más claro para contenedores */
-  --bg-card:      #0f1428; /* fondo de las cards */
-  --bg-card-high: #161b30; /* fondo de elementos elevados */
-  --surface:      #1e2535; /* superficie de modales / overlays */
-  --outline:      #475569; /* bordes y separadores */
-  --outline-dim:  #1e2535; /* bordes sutiles */
+  --bg:           #16192b; /* fondo principal — navy oscuro */
+  --bg-low:       #121524; /* fondo ligeramente más oscuro */
+  --bg-card:      #1d2038; /* fondo de las cards */
+  --bg-card-high: #242748; /* fondo de elementos elevados */
+  --surface:      #242748; /* superficie de modales / overlays */
+  --outline:      #3a3f5c; /* bordes y separadores */
+  --outline-dim:  #23263e; /* bordes sutiles */
 
-  --primary:      #f59e0b; /* amber — color principal, botones, acentos */
-  --primary-dim:  #92600a; /* amber oscuro para hover */
-  --on-primary:   #1a0f00; /* texto sobre fondo amber */
+  --primary:      #c8891e; /* amber dorado — botones, acentos activos */
+  --primary-dim:  #9a6a15; /* amber oscuro para hover */
+  --on-primary:   #ffffff; /* texto sobre fondo amber */
 
-  --secondary:    #7dd3fc; /* sky blue — elementos secundarios */
-  --on-secondary: #00334d; /* texto sobre fondo sky */
+  --secondary:    #5865f2; /* azul-violeta — elementos secundarios */
+  --on-secondary: #ffffff; /* texto sobre fondo secundario */
 
-  --text:         #e2e8f0; /* texto principal */
-  --text-muted:   #94a3b8; /* texto secundario / subtítulos */
+  --text:         #e8eaf6; /* texto principal */
+  --text-muted:   #8b91b8; /* texto secundario / subtítulos */
 
   --green:        #4ade80; /* estado Activo */
   --orange:       #fb923c; /* estado Pausado */
