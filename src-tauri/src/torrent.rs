@@ -14,6 +14,19 @@ use librqbit::{
     http_api::{HttpApi, HttpApiOptions},
 };
 
+fn ff_bin(name: &str) -> std::path::PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let fname = if cfg!(windows) { format!("{}.exe", name) } else { name.to_string() };
+            // bundled next to exe (externalBin) or in resources/ subfolder
+            for candidate in [dir.join(&fname), dir.join("resources").join(&fname)] {
+                if candidate.exists() { return candidate; }
+            }
+        }
+    }
+    std::path::PathBuf::from(name)
+}
+
 static SESSION: OnceLock<std::sync::Arc<Session>> = OnceLock::new();
 static API_PORT: OnceLock<u16> = OnceLock::new();
 static INIT_LOCK: Mutex<bool> = Mutex::const_new(false);
@@ -239,7 +252,7 @@ async fn ensure_transmux_server() -> Result<u16, String> {
 
     async fn h_video(Path(id): Path<String>) -> Result<Response, StatusCode> {
         let src = transmux_sources().lock().await.get(&id).map(|s| s.url.clone()).ok_or(StatusCode::NOT_FOUND)?;
-        let mut child = TokioCommand::new("ffmpeg")
+        let mut child = TokioCommand::new(ff_bin("ffmpeg"))
             .args([
                 "-hide_banner",
                 "-loglevel", "info",
@@ -296,7 +309,7 @@ async fn ensure_transmux_server() -> Result<u16, String> {
         // Subtítulos son pequeños (<100 KB) → .output() es más fiable que streaming
         let out = tokio::time::timeout(
             std::time::Duration::from_secs(20),
-            TokioCommand::new("ffmpeg")
+            TokioCommand::new(ff_bin("ffmpeg"))
                 .args([
                     "-loglevel", "error",
                     "-i", &input,
@@ -338,9 +351,9 @@ async fn ensure_transmux_server() -> Result<u16, String> {
 #[tauri::command]
 pub async fn torrent_transmux(torrent_id: usize, file_idx: usize) -> Result<TransmuxResult, String> {
     // Verificar que ffmpeg + ffprobe estén disponibles
-    for bin in ["ffmpeg", "ffprobe"] {
-        if std::process::Command::new(bin).arg("-version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_err() {
-            return Err(format!("{} no está instalado. Instala ffmpeg en tu sistema.", bin));
+    for name in ["ffmpeg", "ffprobe"] {
+        if std::process::Command::new(ff_bin(name)).arg("-version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_err() {
+            return Err(format!("{} no está disponible. En Windows se incluye con la app; en Linux instala ffmpeg.", name));
         }
     }
 
@@ -380,7 +393,7 @@ async fn probe_subtitles(source_url: &str, session_id: &str, port: u16) -> Resul
     let source = source_url.to_string();
     let out = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        tokio::process::Command::new("ffprobe")
+        tokio::process::Command::new(ff_bin("ffprobe"))
             .args([
                 "-v", "quiet",
                 "-print_format", "json",
