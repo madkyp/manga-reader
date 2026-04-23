@@ -124,17 +124,16 @@ jobs:
           cp src-tauri/binaries/ffprobe squashfs-root/usr/bin/ffprobe
           chmod +x squashfs-root/usr/bin/ffmpeg squashfs-root/usr/bin/ffprobe
 
-          # Parchear AppRun: insertar fixes GPU/EGL justo después del shebang
-          # Usamos sed para evitar heredocs que rompen el YAML
-          echo "--- AppRun original ---"
-          cat squashfs-root/AppRun
-          sed -i '1a unset WAYLAND_DISPLAY' squashfs-root/AppRun
-          sed -i '2a export GDK_BACKEND=x11' squashfs-root/AppRun
-          sed -i '3a export WEBKIT_DISABLE_DMABUF_RENDERER=1' squashfs-root/AppRun
-          sed -i '4a export WEBKIT_DISABLE_COMPOSITING_MODE=1' squashfs-root/AppRun
-          sed -i '5a export LIBGL_DRI3_DISABLE=1' squashfs-root/AppRun
+          # El AppRun de Tauri es un BINARIO compilado, no un script.
+          # Parchear con sed lo corrompía. Solución: renombrarlo a AppRun.real
+          # y crear un wrapper shell que setea las variables y lo llama intacto.
+          echo "--- Tipo de AppRun original ---"
+          file squashfs-root/AppRun
+          mv squashfs-root/AppRun squashfs-root/AppRun.real
+          chmod +x squashfs-root/AppRun.real
+          printf '#!/bin/bash\n# Wayland/EGL fixes — llama al AppRun original de Tauri\nunset WAYLAND_DISPLAY\nexport GDK_BACKEND=x11\nexport WEBKIT_DISABLE_DMABUF_RENDERER=1\nAPPDIR="$(dirname "$(readlink -f "$0")")"\nexport PATH="$APPDIR/usr/bin:$PATH"\nexec "$APPDIR/AppRun.real" "$@"\n' > squashfs-root/AppRun
           chmod +x squashfs-root/AppRun
-          echo "--- AppRun parcheado ---"
+          echo "--- AppRun wrapper ---"
           cat squashfs-root/AppRun
 
           # Reempaquetar con appimagetool
