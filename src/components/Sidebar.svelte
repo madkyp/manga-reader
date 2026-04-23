@@ -27,11 +27,6 @@
 </script>
 
 <nav class="sidebar">
-  <!-- Logo -->
-  <div class="logo">
-    <img src="/logo.png" alt="The Foundry" class="logo-img" />
-  </div>
-
   <!-- Items de navegación principales -->
   <div class="nav-items">
     {#each mainItems as item}
@@ -84,33 +79,15 @@
 
 <style>
   .sidebar {
-    width: 150px;
-    background: var(--bg-low);
-    border-right: 1px solid var(--outline-dim);
+    width: 64px;
+    background: transparent;
+    border-right: none;
     display: flex;
     flex-direction: column;
     align-items: center;
     padding: 8px 0;
     flex-shrink: 0;
     gap: 4px;
-  }
-
-  /* Logo de la app */
-  .logo {
-    width: 140px;
-    height: 140px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin-bottom: 12px;
-    flex-shrink: 0;
-  }
-
-  .logo-img {
-    width: 140px;
-    height: 140px;
-    object-fit: contain;
-    border-radius: 6px;
   }
 
   .nav-items {
