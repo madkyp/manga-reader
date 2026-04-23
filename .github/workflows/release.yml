@@ -121,30 +121,13 @@ jobs:
           cp src-tauri/binaries/ffprobe squashfs-root/usr/bin/ffprobe
           chmod +x squashfs-root/usr/bin/ffmpeg squashfs-root/usr/bin/ffprobe
 
-          # Parchear AppRun: insertar fixes justo después del shebang
-          # (más fiable que buscar la línea exec, que varía entre versiones de Tauri)
+          # Parchear AppRun: insertar fixes GPU/EGL justo después del shebang
+          # Usamos sed para evitar heredocs que rompen el YAML
           echo "--- AppRun original ---"
           cat squashfs-root/AppRun
-          SHEBANG=$(head -1 squashfs-root/AppRun)
-          {
-            echo "$SHEBANG"
-            cat << 'ENVFIX'
-# ── GPU / EGL / Wayland fixes ──────────────────────────────────────────────
-# Deshabilitar renderizado acelerado que falla en drivers modernos / Wayland
-export WEBKIT_DISABLE_DMABUF_RENDERER=1
-export WEBKIT_DISABLE_COMPOSITING_MODE=1
-# Evitar error "Could not create default EGL display" al iniciar WebKit
-export LIBGL_DRI3_DISABLE=1
-export LIBGL_ALWAYS_SOFTWARE=0
-export __EGL_VENDOR_LIBRARY_FILENAMES=""
-# ffmpeg bundleado (se añade al PATH cuando APPDIR ya esté definido por el resto del AppRun)
-_APPDIR_SELF="$(dirname "$(readlink -f "$0")")"
-export PATH="$_APPDIR_SELF/usr/bin:$PATH"
-# ───────────────────────────────────────────────────────────────────────────
-ENVFIX
-            tail -n +2 squashfs-root/AppRun
-          } > squashfs-root/AppRun.new
-          mv squashfs-root/AppRun.new squashfs-root/AppRun
+          sed -i '1a export WEBKIT_DISABLE_DMABUF_RENDERER=1' squashfs-root/AppRun
+          sed -i '2a export WEBKIT_DISABLE_COMPOSITING_MODE=1' squashfs-root/AppRun
+          sed -i '3a export LIBGL_DRI3_DISABLE=1' squashfs-root/AppRun
           chmod +x squashfs-root/AppRun
           echo "--- AppRun parcheado ---"
           cat squashfs-root/AppRun
