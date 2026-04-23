@@ -26,35 +26,39 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: Download ffmpeg (sidecar)
+      - name: Download ffmpeg
         run: |
           Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -OutFile "ffmpeg.zip"
           Expand-Archive -Path "ffmpeg.zip" -DestinationPath "ffmpeg-tmp"
           $bin   = Get-ChildItem "ffmpeg-tmp" -Recurse -Filter "ffmpeg.exe"  | Select-Object -First 1
           $probe = Get-ChildItem "ffmpeg-tmp" -Recurse -Filter "ffprobe.exe" | Select-Object -First 1
-          New-Item -ItemType Directory -Force -Path "src-tauri/binaries" | Out-Null
-          Copy-Item $bin.FullName   "src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe"
-          Copy-Item $probe.FullName "src-tauri/binaries/ffprobe-x86_64-pc-windows-msvc.exe"
-          Write-Host "ffmpeg: $((Get-Item 'src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe').Length) bytes"
+          New-Item -ItemType Directory -Force -Path "src-tauri/resources" | Out-Null
+          Copy-Item $bin.FullName   "src-tauri/resources/ffmpeg.exe"
+          Copy-Item $probe.FullName "src-tauri/resources/ffprobe.exe"
+          Write-Host "ffmpeg:  $((Get-Item 'src-tauri/resources/ffmpeg.exe').Length) bytes"
+          Write-Host "ffprobe: $((Get-Item 'src-tauri/resources/ffprobe.exe').Length) bytes"
 
       - name: Install dependencies
         run: npm ci
 
       - name: Build
-        run: npm run tauri build -- --bundles nsis
+        run: |
+          Set-Content -Path "src-tauri/resources-override.json" -Value '{"bundle":{"resources":["resources/ffmpeg.exe","resources/ffprobe.exe"]}}' -Encoding UTF8
+          npm run tauri build -- --bundles nsis --config src-tauri/resources-override.json
         env:
           TAURI_SIGNING_PRIVATE_KEY: ""
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
-          TAURI_CONFIG: '{"bundle":{"externalBin":["binaries/ffmpeg","binaries/ffprobe"]}}'
 
-      - name: Verify installer contains ffmpeg
+      - name: Verify installer size (debe ser >100 MB con ffmpeg)
         run: |
           $installer = Get-ChildItem "src-tauri/target/release/bundle/nsis/*.exe" | Select-Object -First 1
-          Write-Host "Installer: $($installer.FullName) ($($installer.Length) bytes)"
-          Write-Host "=== Archivos en el instalador ==="
-          & "C:\Program Files\7-Zip\7z.exe" l $installer.FullName 2>&1 | Write-Host
-          Write-Host "=== Buscando ffmpeg ==="
-          & "C:\Program Files\7-Zip\7z.exe" l $installer.FullName 2>&1 | Select-String -Pattern "ffmpeg|ffprobe" | Write-Host
+          $mb = [math]::Round($installer.Length / 1MB, 1)
+          Write-Host "Installer: $($installer.FullName) — $mb MB"
+          if ($installer.Length -lt 50MB) {
+            Write-Error "FALLO: el instalador es demasiado pequeño ($mb MB) — ffmpeg no fue incluido"
+            exit 1
+          }
+          Write-Host "OK: ffmpeg incluido (tamaño razonable)"
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
