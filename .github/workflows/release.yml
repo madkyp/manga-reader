@@ -120,18 +120,21 @@ jobs:
           cp src-tauri/binaries/ffprobe squashfs-root/usr/bin/ffprobe
           chmod +x squashfs-root/usr/bin/ffmpeg squashfs-root/usr/bin/ffprobe
 
-          # AppRun personalizado con fixes de Wayland/GPU
-          cat > squashfs-root/AppRun << 'APPRUN'
-          #!/bin/bash
-          APPDIR="$(dirname "$(readlink -f "$0")")"
-          # Fixes para Wayland y drivers modernos
-          export WEBKIT_DISABLE_DMABUF_RENDERER=1
-          export WEBKIT_DISABLE_COMPOSITING_MODE=1
-          # ffmpeg bundleado
-          export PATH="$APPDIR/usr/bin:$PATH"
-          exec "$APPDIR/usr/bin/app" "$@"
-          APPRUN
+          # Parchear AppRun original: inyectar fixes de Wayland antes del exec
+          # NO reemplazamos — el AppRun original configura APPDIR, LD_LIBRARY_PATH
+          # y rutas internas de WebKit. Sustituirlo rompe WebKitNetworkProcess.
+          echo "--- AppRun original ---"
+          cat squashfs-root/AppRun
+          awk '/^exec / {
+            print "# Wayland / GPU fixes"
+            print "export WEBKIT_DISABLE_DMABUF_RENDERER=1"
+            print "export WEBKIT_DISABLE_COMPOSITING_MODE=1"
+            print "export PATH=\"$APPDIR/usr/bin:$PATH\""
+          } { print }' squashfs-root/AppRun > squashfs-root/AppRun.new
+          mv squashfs-root/AppRun.new squashfs-root/AppRun
           chmod +x squashfs-root/AppRun
+          echo "--- AppRun parcheado ---"
+          cat squashfs-root/AppRun
 
           # Reempaquetar con appimagetool
           wget -q "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" -O appimagetool
