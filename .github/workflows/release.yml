@@ -135,7 +135,7 @@ jobs:
           file squashfs-root/AppRun
           mv squashfs-root/AppRun squashfs-root/AppRun.real
           chmod +x squashfs-root/AppRun.real
-          printf '#!/bin/bash\n# Wayland/EGL fixes — llama al AppRun original de Tauri\nunset WAYLAND_DISPLAY\nexport GDK_BACKEND=x11\nexport WEBKIT_DISABLE_DMABUF_RENDERER=1\nAPPDIR="$(dirname "$(readlink -f "$0")")"\nexport PATH="$APPDIR/usr/bin:$PATH"\nexec "$APPDIR/AppRun.real" "$@"\n' > squashfs-root/AppRun
+          printf '#!/bin/bash\n# Wayland/EGL fixes\nunset WAYLAND_DISPLAY\nexport GDK_BACKEND=x11\nexport WEBKIT_DISABLE_DMABUF_RENDERER=1\nexport WEBKIT_DISABLE_COMPOSITING_MODE=1\nexport LIBGL_DRI3_DISABLE=1\nAPPDIR="${APPDIR:-$(dirname "$(readlink -f "$0")")}"\nexport PATH="$APPDIR/usr/bin:$PATH"\nexec "$APPDIR/AppRun.real" "$@"\n' > squashfs-root/AppRun
           chmod +x squashfs-root/AppRun
           echo "--- AppRun wrapper ---"
           cat squashfs-root/AppRun
