@@ -88,6 +88,7 @@
     padding: 8px 0;
     flex-shrink: 0;
     gap: 4px;
+    flex: 1;
   }
 
   .nav-items {
