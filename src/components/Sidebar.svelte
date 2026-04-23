@@ -97,8 +97,8 @@
 
   /* Logo de la app */
   .logo {
-    width: 64px;
-    height: 64px;
+    width: 72px;
+    height: 72px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -107,8 +107,8 @@
   }
 
   .logo-img {
-    width: 62px;
-    height: 62px;
+    width: 70px;
+    height: 70px;
     object-fit: contain;
     border-radius: 6px;
   }
