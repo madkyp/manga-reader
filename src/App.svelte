@@ -24,14 +24,9 @@
 </script>
 
 <div class="app">
-  <!-- Columna izquierda: logo + navegación (oculta en el lector) -->
+  <!-- Sidebar de navegación — siempre visible excepto en el lector -->
   {#if $currentView !== 'reader'}
-    <div class="left-col">
-      <div class="app-logo">
-        <img src="/logo.png" alt="The Foundry" />
-      </div>
-      <Sidebar />
-    </div>
+    <Sidebar />
   {/if}
 
   <!-- Área de contenido principal -->
@@ -73,25 +68,5 @@
     overflow: hidden;
   }
 
-  .left-col {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    background: var(--bg-low);
-    border-right: 1px solid var(--outline-dim);
-    flex-shrink: 0;
-  }
-
-  .app-logo {
-    padding: 12px 8px 4px;
-    flex-shrink: 0;
-  }
-
-  .app-logo img {
-    width: 120px;
-    height: 120px;
-    object-fit: contain;
-    display: block;
-  }
 
 </style>

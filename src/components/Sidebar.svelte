@@ -80,8 +80,8 @@
 <style>
   .sidebar {
     width: 64px;
-    background: transparent;
-    border-right: none;
+    background: var(--bg-low);
+    border-right: 1px solid var(--outline-dim);
     display: flex;
     flex-direction: column;
     align-items: center;
