@@ -127,9 +127,9 @@
   .nav-btn.active { background: var(--bg-card-high); color: var(--primary); }
   .nav-btn.disabled { opacity: 0.35; cursor: default; }
 
-  .nav-icon { width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; }
-  .nav-icon svg { width: 18px; height: 18px; }
-  .nav-label { font-size: 9px; font-weight: 600; letter-spacing: 0.03em; }
+  .nav-icon { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; }
+  .nav-icon svg { width: 22px; height: 22px; }
+  .nav-label { font-size: 12px; font-weight: 600; letter-spacing: 0.03em; }
 
   .notif-badge {
     position: absolute;
