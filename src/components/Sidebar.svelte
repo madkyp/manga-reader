@@ -84,7 +84,7 @@
 
 <style>
   .sidebar {
-    width: 64px;
+    width: 150px;
     background: var(--bg-low);
     border-right: 1px solid var(--outline-dim);
     display: flex;
@@ -97,8 +97,8 @@
 
   /* Logo de la app */
   .logo {
-    width: 72px;
-    height: 72px;
+    width: 140px;
+    height: 140px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -107,8 +107,8 @@
   }
 
   .logo-img {
-    width: 70px;
-    height: 70px;
+    width: 140px;
+    height: 140px;
     object-fit: contain;
     border-radius: 6px;
   }
