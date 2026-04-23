@@ -443,12 +443,41 @@ async fn probe_subtitles(source_url: &str, session_id: &str, port: u16) -> Resul
 #[tauri::command]
 pub fn torrent_open_external(url: String) -> Result<String, String> {
     #[cfg(target_os = "windows")]
-    let players: &[&str] = &[
-        r"C:\Program Files\VideoLAN\VLC\vlc.exe",
-        r"C:\Program Files (x86)\VideoLAN\VLC\vlc.exe",
-        "vlc",
-        "mpv",
-    ];
+    {
+        // Construir candidatos usando variables de entorno para no asumir C:\
+        let mut candidates: Vec<String> = Vec::new();
+        for var in &["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"] {
+            if let Ok(pf) = std::env::var(var) {
+                candidates.push(format!(r"{}\VideoLAN\VLC\vlc.exe", pf));
+                candidates.push(format!(r"{}\mpv\mpv.exe", pf));
+                candidates.push(format!(r"{}\mpv-x86_64\mpv.exe", pf));
+            }
+        }
+        // LocalAppData (instalaciones de usuario)
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            candidates.push(format!(r"{}\Programs\VLC\vlc.exe", local));
+        }
+        // PATH (vlc.exe o mpv.exe en el PATH del sistema)
+        candidates.push("vlc".to_string());
+        candidates.push("mpv".to_string());
+
+        for p in &candidates {
+            if std::process::Command::new(p).arg(&url).spawn().is_ok() {
+                let name = std::path::Path::new(p)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(p);
+                return Ok(name.to_string());
+            }
+        }
+
+        // Fallback: abrir con el reproductor predeterminado de Windows
+        return std::process::Command::new("cmd")
+            .args(["/C", "start", "", url.as_str()])
+            .spawn()
+            .map(|_| "default".to_string())
+            .map_err(|e| format!("No se encontró reproductor: {}", e));
+    }
 
     #[cfg(target_os = "macos")]
     let players: &[&str] = &["mpv", "/Applications/VLC.app/Contents/MacOS/VLC", "vlc"];
@@ -456,6 +485,7 @@ pub fn torrent_open_external(url: String) -> Result<String, String> {
     #[cfg(all(unix, not(target_os = "macos")))]
     let players: &[&str] = &["mpv", "vlc"];
 
+    #[cfg(not(target_os = "windows"))]
     for p in players {
         if std::process::Command::new(p).arg(&url).spawn().is_ok() {
             let name = std::path::Path::new(p)
@@ -466,17 +496,15 @@ pub fn torrent_open_external(url: String) -> Result<String, String> {
         }
     }
 
-    // Fallback del sistema
-    #[cfg(target_os = "windows")]
-    let opener = ("cmd", vec!["/C", "start", "", url.as_str()]);
     #[cfg(target_os = "macos")]
-    let opener = ("open", vec![url.as_str()]);
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let opener = ("xdg-open", vec![url.as_str()]);
+    return std::process::Command::new("open").arg(&url).spawn()
+        .map(|_| "open".to_string())
+        .map_err(|e| format!("No se encontró reproductor externo: {}", e));
 
-    std::process::Command::new(opener.0).args(&opener.1).spawn()
-        .map(|_| opener.0.to_string())
-        .map_err(|e| format!("No se encontró reproductor externo: {}", e))
+    #[cfg(all(unix, not(target_os = "macos")))]
+    return std::process::Command::new("xdg-open").arg(&url).spawn()
+        .map(|_| "xdg-open".to_string())
+        .map_err(|e| format!("No se encontró reproductor externo: {}", e));
 }
 
 #[tauri::command]
