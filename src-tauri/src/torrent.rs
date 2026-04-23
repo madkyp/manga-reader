@@ -360,8 +360,22 @@ async fn ensure_transmux_server() -> Result<u16, String> {
 pub async fn torrent_transmux(torrent_id: usize, file_idx: usize) -> Result<TransmuxResult, String> {
     // Verificar que ffmpeg + ffprobe estén disponibles
     for name in ["ffmpeg", "ffprobe"] {
-        if std::process::Command::new(ff_bin(name)).arg("-version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_err() {
-            return Err(format!("{} no está disponible. En Windows se incluye con la app; en Linux instala ffmpeg.", name));
+        let path = ff_bin(name);
+        let exists = path.exists();
+        let ok = exists && std::process::Command::new(&path)
+            .arg("-version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok();
+        if !ok {
+            return Err(format!(
+                "{} no encontrado.\nBuscado en: {}\nExiste: {}\nRESOURCE_DIR: {}",
+                name,
+                path.display(),
+                exists,
+                RESOURCE_DIR.get().map(|p| p.display().to_string()).unwrap_or_else(|| "no inicializado".into())
+            ));
         }
     }
 
