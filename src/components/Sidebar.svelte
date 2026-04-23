@@ -29,7 +29,7 @@
 <nav class="sidebar">
   <!-- Logo -->
   <div class="logo">
-    <img src="/logo.jpg" alt="logo" class="logo-img" />
+    <img src="/logo.png" alt="The Foundry" class="logo-img" />
   </div>
 
   <!-- Items de navegación principales -->
@@ -107,10 +107,10 @@
   }
 
   .logo-img {
-    width: 36px;
-    height: 36px;
-    object-fit: cover;
-    border-radius: 8px;
+    width: 44px;
+    height: 44px;
+    object-fit: contain;
+    border-radius: 6px;
   }
 
   .nav-items {
