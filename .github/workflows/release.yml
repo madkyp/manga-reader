@@ -125,9 +125,11 @@ jobs:
           # Usamos sed para evitar heredocs que rompen el YAML
           echo "--- AppRun original ---"
           cat squashfs-root/AppRun
-          sed -i '1a export WEBKIT_DISABLE_DMABUF_RENDERER=1' squashfs-root/AppRun
-          sed -i '2a export WEBKIT_DISABLE_COMPOSITING_MODE=1' squashfs-root/AppRun
-          sed -i '3a export LIBGL_DRI3_DISABLE=1' squashfs-root/AppRun
+          sed -i '1a unset WAYLAND_DISPLAY' squashfs-root/AppRun
+          sed -i '2a export GDK_BACKEND=x11' squashfs-root/AppRun
+          sed -i '3a export WEBKIT_DISABLE_DMABUF_RENDERER=1' squashfs-root/AppRun
+          sed -i '4a export WEBKIT_DISABLE_COMPOSITING_MODE=1' squashfs-root/AppRun
+          sed -i '5a export LIBGL_DRI3_DISABLE=1' squashfs-root/AppRun
           chmod +x squashfs-root/AppRun
           echo "--- AppRun parcheado ---"
           cat squashfs-root/AppRun
