@@ -14,13 +14,21 @@ use librqbit::{
     http_api::{HttpApi, HttpApiOptions},
 };
 
+// Inicializado en lib.rs setup() con app.path().resource_dir()
+pub static RESOURCE_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
 fn ff_bin(name: &str) -> std::path::PathBuf {
+    let fname = if cfg!(windows) { format!("{}.exe", name) } else { name.to_string() };
+    // 1. resource_dir resuelto por Tauri en startup (más fiable)
+    if let Some(dir) = RESOURCE_DIR.get() {
+        let c = dir.join(&fname);
+        if c.exists() { return c; }
+    }
+    // 2. Junto al exe
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let fname = if cfg!(windows) { format!("{}.exe", name) } else { name.to_string() };
-            // bundled next to exe (externalBin) or in resources/ subfolder
-            for candidate in [dir.join(&fname), dir.join("resources").join(&fname)] {
-                if candidate.exists() { return candidate; }
+            for c in [dir.join(&fname), dir.join("resources").join(&fname)] {
+                if c.exists() { return c; }
             }
         }
     }

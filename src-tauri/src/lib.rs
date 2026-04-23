@@ -90,6 +90,12 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
         .setup(|app| {
+            // Guardar el resource_dir real para que ff_bin() pueda encontrar ffmpeg
+            if let Ok(dir) = app.path().resource_dir() {
+                eprintln!("[setup] resource_dir = {}", dir.display());
+                torrent::RESOURCE_DIR.set(dir).ok();
+            }
+
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
