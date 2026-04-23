@@ -26,15 +26,16 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: Download ffmpeg
+      - name: Download ffmpeg (sidecar)
         run: |
           Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -OutFile "ffmpeg.zip"
           Expand-Archive -Path "ffmpeg.zip" -DestinationPath "ffmpeg-tmp"
           $bin   = Get-ChildItem "ffmpeg-tmp" -Recurse -Filter "ffmpeg.exe"  | Select-Object -First 1
           $probe = Get-ChildItem "ffmpeg-tmp" -Recurse -Filter "ffprobe.exe" | Select-Object -First 1
-          Copy-Item $bin.FullName   "src-tauri/ffmpeg.exe"
-          Copy-Item $probe.FullName "src-tauri/ffprobe.exe"
-          Write-Host "ffmpeg size: $((Get-Item 'src-tauri/ffmpeg.exe').Length) bytes"
+          New-Item -ItemType Directory -Force -Path "src-tauri/binaries" | Out-Null
+          Copy-Item $bin.FullName   "src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe"
+          Copy-Item $probe.FullName "src-tauri/binaries/ffprobe-x86_64-pc-windows-msvc.exe"
+          Write-Host "ffmpeg: $((Get-Item 'src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe').Length) bytes"
 
       - name: Install dependencies
         run: npm ci
@@ -44,7 +45,7 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ""
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
-          TAURI_CONFIG: '{"bundle":{"resources":{"ffmpeg.exe":"ffmpeg.exe","ffprobe.exe":"ffprobe.exe"}}}'
+          TAURI_CONFIG: '{"bundle":{"externalBin":["binaries/ffmpeg","binaries/ffprobe"]}}'
 
       - name: Verify installer contains ffmpeg
         run: |
