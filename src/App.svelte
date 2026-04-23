@@ -78,13 +78,14 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 10px 8px;
+    padding: 10px;
     flex-shrink: 0;
+    width: 160px;
   }
 
   .logo-block img {
-    width: 48px;
-    height: 48px;
+    width: 140px;
+    height: 140px;
     object-fit: contain;
   }
 

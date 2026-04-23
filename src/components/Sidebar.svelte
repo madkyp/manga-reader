@@ -79,7 +79,7 @@
 
 <style>
   .sidebar {
-    width: 64px;
+    width: 160px;
     background: var(--bg-low);
     border-right: 1px solid var(--outline-dim);
     display: flex;
