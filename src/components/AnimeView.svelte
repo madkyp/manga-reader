@@ -249,13 +249,10 @@
           const n = parseInt(k); return isNaN(n) ? max : Math.max(max, n);
         }, 0);
 
-        // episode_count del detalle de Kitsu (campo oficial, más fiable para series largas)
-        const maxEpCount = base.episode_count ?? 0;
-
-        // kitsu_episodes también devuelve el total de eps en su DB
-        const kitsuDbTotal = r.total ?? 0;
-
-        const maxAired = Math.max(maxKitsu, maxKitsuDb, maxAniList, anilistMaxAired, maxEpCount, kitsuDbTotal);
+        // maxAired = el episodio más alto que SABEMOS que ya se emitió.
+        // NO usamos episode_count (total planificado de la serie, puede ser
+        // muy alto para series en curso) ni kitsuDbTotal (conteo de la DB).
+        const maxAired = Math.max(maxKitsu, maxKitsuDb, maxAniList, anilistMaxAired);
         const cap = maxAired > 0 ? maxAired + 5 : Infinity;
 
         // Kitsu puede tener la base desactualizada para series muy largas.
