@@ -2,6 +2,7 @@ mod scraper;
 mod downloader;
 mod vpn;
 mod torrent;
+mod mpv;
 
 use serde::Serialize;
 use scraper::olympus::MangaItem;
@@ -240,6 +241,13 @@ pub fn run() {
             scraper::animeflv::animeflv_image,
             scraper::animeflv::animeflv_extract,
             scraper::animeflv::anilist_episode_dates,
+            // MPV embebido (paso 1 — ventana propia, IPC básica)
+            mpv::mpv_open,
+            mpv::mpv_pause_toggle,
+            mpv::mpv_seek,
+            mpv::mpv_set_volume,
+            mpv::mpv_close,
+            mpv::mpv_raw_command,
         ])
         .run(tauri::generate_context!())
         .expect("error al arrancar la aplicación Tauri");

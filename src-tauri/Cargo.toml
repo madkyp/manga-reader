@@ -44,3 +44,4 @@ urlencoding = "2"
 axum = "0.8"
 tokio-util = { version = "0.7", features = ["io"] }
 tauri-plugin-single-instance = "2"
+libmpv2 = "5.0"
