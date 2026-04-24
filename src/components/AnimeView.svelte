@@ -256,7 +256,7 @@
         const kitsuDbTotal = r.total ?? 0;
 
         const maxAired = Math.max(maxKitsu, maxKitsuDb, maxAniList, anilistMaxAired, maxEpCount, kitsuDbTotal);
-        const cap = maxAired > 0 ? maxAired + 20 : Infinity;
+        const cap = maxAired > 0 ? maxAired + 5 : Infinity;
 
         // Kitsu puede tener la base desactualizada para series muy largas.
         // Si AniList/episode_count conoce episodios que Kitsu no tiene,
