@@ -306,7 +306,8 @@
   let torrentPlayer  = $state(null);
   let torrentPollId  = null;
   let showSubMenu    = $state(false);
-  let activeSub      = $state(null); // separado de torrentPlayer para que el polling no resetee los subs
+  let activeSub      = $state(null);
+  let subLoadError   = $state('');
 
   async function handleTorrentSelect({ torrent, file }) {
     torrentModal = null;
@@ -393,13 +394,19 @@
             fileIdx: fileEntry.index,
           });
           playUrl = t.video_url;
+          if (t.duration_secs > 0) videoDuration = t.duration_secs;
           const embedded = (t.subs ?? []).map(s => ({
-            url:  s.url,
-            name: s.title || s.lang || `Sub ${s.index}`,
-            lang: (s.lang || '').toUpperCase(),
+            url:    s.url,
+            name:   s.title || s.lang || `Sub ${s.index + 1}`,
+            lang:   (s.lang || '').toUpperCase(),
+            codec:  s.codec || '',
             embedded: true,
           }));
           allSubs = [...embedded, ...subFiles];
+          // Aviso si solo hay subs bitmap (PGS/DVDSUB — no soportados)
+          if (embedded.length === 0 && subFiles.length === 0 && (t.bitmap_subs ?? 0) > 0) {
+            torrentPlayer = { ...torrentPlayer, videoError: `Este archivo solo tiene subtítulos de imagen (PGS/DVDSUB) — no se pueden mostrar. Usa un reproductor externo.` };
+          }
         } catch(e) {
           torrentPlayer = { ...torrentPlayer, loading: false, videoError: `ffmpeg falló (¿instalado?): ${e}` };
           return;
@@ -407,15 +414,19 @@
       }
 
       torrentPlayer = {
-        torrentId: result.torrent_id,
-        fileUrl: playUrl,
-        fileName: fileEntry?.name || result.name,
-        status: null,
-        subs: allSubs,
-        activeSub: null,
-        videoError: '',
-        needsExternal: false,
-        loading: false,
+        torrentId:      result.torrent_id,
+        fileUrl:        playUrl,
+        fileName:       fileEntry?.name || result.name,
+        status:         null,
+        subs:           allSubs,
+        activeSub:      null,
+        videoError:     '',
+        needsExternal:  false,
+        loading:        false,
+        _fileIdx:       fileEntry?.index ?? 0,
+        _subFiles:      subFiles,
+        _needsTransmux: needsTransmux,
+        _transmuxBase:  needsTransmux ? playUrl : null,  // URL sin ?start= para seek
       };
 
       // Arrancar polling de progreso
@@ -455,26 +466,142 @@
     if (torrentPlayer) torrentPlayer = { ...torrentPlayer, activeSub: sub };
   }
 
+  let probingSubs = $state(false);
+  async function probeSubs() {
+    if (!torrentPlayer?.torrentId) return;
+    probingSubs = true;
+    try {
+      const fileIdx = torrentPlayer._fileIdx ?? 0;
+      const [tracks, bitmapCount] = await tauri('torrent_probe_subs', {
+        torrentId: torrentPlayer.torrentId,
+        fileIdx,
+      });
+      const subs = tracks.map(s => ({
+        url:      s.url,
+        name:     s.title || s.lang || `Sub ${s.index + 1}`,
+        lang:     (s.lang || '').toUpperCase(),
+        codec:    s.codec || '',
+        embedded: true,
+      }));
+      const allSubs = [...subs, ...(torrentPlayer._subFiles ?? [])];
+      let videoError = torrentPlayer.videoError || '';
+      if (allSubs.length === 0 && bitmapCount > 0) {
+        videoError = `Solo subtítulos de imagen (PGS/DVDSUB, ${bitmapCount} pista${bitmapCount > 1 ? 's' : ''}) — no soportados en el player interno. Prueba con reproductor externo.`;
+      } else if (allSubs.length === 0) {
+        videoError = 'No se detectaron pistas de subtítulos en este archivo.';
+      }
+      torrentPlayer = { ...torrentPlayer, subs: allSubs, videoError };
+    } catch(e) {
+      torrentPlayer = { ...torrentPlayer, videoError: `Error al detectar subtítulos: ${e}` };
+    } finally {
+      probingSubs = false;
+    }
+  }
+
   // Subtítulos: parseo propio + overlay CSS (WebKit ignora <track> en Tauri)
   let subCues        = $state([]);
   let currentSubLine = $state('');
   let videoEl        = $state(null);
 
+  // Controles de reproducción personalizados
+  let videoPaused   = $state(true);
+  let videoDuration = $state(0);   // duración efectiva (ffprobe o videoEl.duration)
+  let videoCurrent  = $state(0);
+  let bufferedEnd   = $state(0);
+  let showControls  = $state(true);
+  let seekLoading   = $state(false);
+  let hideTimer     = null;
+
+  function revealControls() {
+    showControls = true;
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => { if (!videoPaused) showControls = false; }, 3000);
+  }
+
+  function togglePlay() {
+    if (!videoEl) return;
+    if (videoEl.paused) videoEl.play(); else videoEl.pause();
+  }
+
+  function seekTo(e) {
+    const dur = videoDuration;
+    if (!videoEl || dur <= 0) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pct  = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const targetTime = pct * dur;
+
+    if (torrentPlayer?._transmuxBase) {
+      // Transmux: reiniciar ffmpeg desde la nueva posición — el servidor descarga
+      // los trozos del torrent a partir del byte correspondiente a ese segundo.
+      seekLoading = true;
+      videoCurrent = targetTime;
+      const newSrc = `${torrentPlayer._transmuxBase}?start=${targetTime.toFixed(3)}`;
+      videoEl.src = newSrc;
+      videoEl.load();
+      videoEl.play().catch(() => {});
+    } else {
+      // Stream directo (MP4/WebM): el navegador hace un Range request a librqbit
+      videoEl.currentTime = targetTime;
+    }
+  }
+
+  function onVideoPlay()  { videoPaused = false; revealControls(); }
+  function onVideoPause() { videoPaused = true;  showControls = true; clearTimeout(hideTimer); }
+  function onCanPlay()    { seekLoading = false; }
+
+  function onDurationChange(e) {
+    const d = e.currentTarget.duration;
+    // Para transmux el pipe no reporta duración → usar la de ffprobe (ya en videoDuration)
+    if (isFinite(d) && d > 0) videoDuration = d;
+  }
+  function onProgress(e) {
+    const buf = e.currentTarget.buffered;
+    if (buf.length > 0) bufferedEnd = buf.end(buf.length - 1);
+  }
+
+  function fmtTime(s) {
+    if (!s || isNaN(s) || !isFinite(s)) return '0:00';
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = Math.floor(s % 60);
+    return h > 0
+      ? `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`
+      : `${m}:${String(sec).padStart(2,'0')}`;
+  }
+
   // Depende solo de activeSub, NO de torrentPlayer → el polling cada 2s no resetea los subs
   $effect(() => {
     const sub = activeSub;
-    subCues = []; currentSubLine = '';
+    subCues = []; currentSubLine = ''; subLoadError = '';
     if (!sub?.url) return;
     const url = sub.url;
+    const codec = sub.codec || '';
     (async () => {
       try {
-        const raw = await (await fetch(url)).text();
-        const ext = url.split('?')[0].split('.').pop()?.toLowerCase() ?? '';
-        const vtt = ext === 'srt' ? srtToVtt(raw)
-                  : ext === 'ass' || ext === 'ssa' ? assToVtt(raw)
-                  : raw;
-        subCues = parseVttCues(vtt);
-      } catch {
+        const resp = await fetch(url);
+        if (!resp.ok || resp.status === 204) {
+          subLoadError = `No se pudo cargar la pista de subtítulos (HTTP ${resp.status})`;
+          return;
+        }
+        const raw = await resp.text();
+        if (!raw.trim()) {
+          subLoadError = 'La pista de subtítulos está vacía (archivo incompleto o formato no soportado)';
+          return;
+        }
+        // Para subs embebidos (url interna /transmux/.../sub/N) ya vienen como WebVTT.
+        // Para subs externos, detectar por extensión o codec.
+        const ext = url.split('?')[0].split('/').pop()?.split('.').pop()?.toLowerCase() ?? '';
+        const isAss = codec === 'ass' || codec === 'ssa' || ext === 'ass' || ext === 'ssa';
+        const isSrt = codec === 'subrip' || ext === 'srt';
+        const vtt = isSrt ? srtToVtt(raw) : isAss ? assToVtt(raw) : raw;
+        const cues = parseVttCues(vtt);
+        if (cues.length === 0) {
+          subLoadError = 'No se encontraron líneas de subtítulo (puede que el archivo esté incompleto)';
+          return;
+        }
+        subCues = cues;
+      } catch(e) {
+        subLoadError = `Error al cargar subtítulos: ${String(e)}`;
         subCues = [];
       }
     })();
@@ -505,6 +632,7 @@
 
   function onTimeUpdate(e) {
     const t = e.currentTarget.currentTime;
+    videoCurrent = t;
     const cue = subCues.find(c => t >= c.start && t <= c.end);
     currentSubLine = cue ? cue.text : '';
   }
@@ -905,60 +1033,120 @@
 
       {#if torrentPlayer.fileUrl}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="video-container" onmouseleave={() => showSubMenu = false}>
+        <div class="video-container" onmousemove={revealControls} onmouseleave={() => showSubMenu = false}>
           <!-- svelte-ignore a11y_media_has_caption -->
           <video
             class="torrent-video"
             src={torrentPlayer.fileUrl}
-            controls autoplay playsinline
+            autoplay playsinline
             onerror={onVideoError}
             ontimeupdate={onTimeUpdate}
+            ondurationchange={onDurationChange}
+            onprogress={onProgress}
+            onplay={onVideoPlay}
+            onpause={onVideoPause}
+            oncanplay={onCanPlay}
             bind:this={videoEl}
           ></video>
 
-          {#if currentSubLine}
-            <div class="sub-overlay">{currentSubLine}</div>
-          {/if}
-
-          {#if torrentPlayer.subs?.length > 0}
-            <div class="cc-wrap">
-              <button
-                class="cc-btn"
-                class:cc-active={!!torrentPlayer.activeSub}
-                onclick={(e) => { e.stopPropagation(); showSubMenu = !showSubMenu; }}
-                title="Subtítulos"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <rect x="2" y="6" width="20" height="12" rx="2"/>
-                  <path d="M7 12h4M15 12h2M7 16h2M13 16h4"/>
-                </svg>
-                CC
-              </button>
-              {#if showSubMenu}
-                <!-- svelte-ignore a11y_click_events_have_key_events -->
-                <div class="cc-menu">
-                  <button
-                    class="cc-item"
-                    class:cc-item-active={!torrentPlayer.activeSub}
-                    onclick={() => { selectSub(null); showSubMenu = false; }}
-                  >
-                    <span class="cc-dot"></span>Off
-                  </button>
-                  {#each torrentPlayer.subs as s}
-                    <button
-                      class="cc-item"
-                      class:cc-item-active={torrentPlayer.activeSub?.url === s.url}
-                      onclick={() => { selectSub(s); showSubMenu = false; }}
-                    >
-                      <span class="cc-dot"></span>
-                      {#if s.lang}<span class="cc-lang">{s.lang}</span>{/if}
-                      {s.title || s.name || `Pista ${s.index + 1}`}
-                    </button>
-                  {/each}
-                </div>
-              {/if}
+          {#if seekLoading}
+            <div class="seek-loading">
+              <div class="spinner large"></div>
             </div>
           {/if}
+
+          {#if currentSubLine}
+            <div class="sub-overlay">{currentSubLine}</div>
+          {:else if subLoadError && activeSub}
+            <div class="sub-overlay sub-error">{subLoadError}</div>
+          {/if}
+
+          <!-- Controles personalizados -->
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <div class="vid-controls" class:hidden={!showControls}>
+            <!-- Barra de progreso -->
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div class="seek-track" onclick={seekTo}>
+              <div class="seek-buf"  style="width:{videoDuration > 0 ? (bufferedEnd / videoDuration * 100) : 0}%"></div>
+              <div class="seek-fill" style="width:{videoDuration > 0 ? (videoCurrent / videoDuration * 100) : 0}%">
+                <div class="seek-thumb"></div>
+              </div>
+            </div>
+
+            <div class="ctrl-row">
+              <!-- Play / Pause -->
+              <button class="ctrl-btn" onclick={togglePlay} title={videoPaused ? 'Reproducir' : 'Pausar'}>
+                {#if videoPaused}
+                  <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                {:else}
+                  <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                {/if}
+              </button>
+
+              <!-- Tiempo -->
+              <span class="ctrl-time">{fmtTime(videoCurrent)} / {fmtTime(videoDuration)}</span>
+
+              <div class="ctrl-spacer"></div>
+
+              <!-- Subtítulos -->
+              <div class="cc-wrap">
+                {#if torrentPlayer.subs?.length > 0}
+                  <button
+                    class="cc-btn"
+                    class:cc-active={!!torrentPlayer.activeSub}
+                    onclick={(e) => { e.stopPropagation(); showSubMenu = !showSubMenu; }}
+                    title="Subtítulos"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <rect x="2" y="6" width="20" height="12" rx="2"/>
+                      <path d="M7 12h4M15 12h2M7 16h2M13 16h4"/>
+                    </svg>
+                    CC
+                  </button>
+                  {#if showSubMenu}
+                    <!-- svelte-ignore a11y_click_events_have_key_events -->
+                    <div class="cc-menu">
+                      <button
+                        class="cc-item"
+                        class:cc-item-active={!torrentPlayer.activeSub}
+                        onclick={() => { selectSub(null); showSubMenu = false; }}
+                      >
+                        <span class="cc-dot"></span>Off
+                      </button>
+                      {#each torrentPlayer.subs as s}
+                        <button
+                          class="cc-item"
+                          class:cc-item-active={torrentPlayer.activeSub?.url === s.url}
+                          onclick={() => { selectSub(s); showSubMenu = false; }}
+                        >
+                          <span class="cc-dot"></span>
+                          {#if s.lang}<span class="cc-lang">{s.lang}</span>{/if}
+                          {s.title || s.name || `Pista ${s.index + 1}`}
+                        </button>
+                      {/each}
+                    </div>
+                  {/if}
+                {:else if torrentPlayer._needsTransmux}
+                  <button
+                    class="cc-btn cc-detect"
+                    onclick={probeSubs}
+                    disabled={probingSubs}
+                    title="Buscar pistas de subtítulos embebidas"
+                  >
+                    {#if probingSubs}
+                      <span class="cc-spinner"></span>
+                    {:else}
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="2" y="6" width="20" height="12" rx="2"/>
+                        <path d="M7 12h4M15 12h2M7 16h2M13 16h4"/>
+                      </svg>
+                    {/if}
+                    {probingSubs ? '…' : 'Sub'}
+                  </button>
+                {/if}
+              </div>
+            </div>
+          </div>
         </div>
 
         {#if torrentPlayer.videoError}
@@ -1673,7 +1861,7 @@
 
   .sub-overlay {
     position: absolute;
-    bottom: 52px;
+    bottom: 64px;
     left: 5%;
     right: 5%;
     text-align: center;
@@ -1688,6 +1876,74 @@
     padding: 3px 10px;
     border-radius: 4px;
   }
+  .sub-overlay.sub-error {
+    font-size: 11px;
+    color: #fca5a5;
+    background: rgba(127,0,0,0.5);
+  }
+
+  .seek-loading {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.5);
+    z-index: 5;
+  }
+
+  /* ── Controles personalizados ── */
+  .vid-controls {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    background: linear-gradient(transparent, rgba(0,0,0,0.75));
+    padding: 20px 10px 8px;
+    display: flex; flex-direction: column; gap: 5px;
+    transition: opacity 0.25s;
+    z-index: 10;
+  }
+  .vid-controls.hidden { opacity: 0; pointer-events: none; }
+
+  .seek-track {
+    position: relative; height: 4px; border-radius: 2px;
+    background: rgba(255,255,255,0.2); cursor: pointer;
+    flex-shrink: 0;
+    transition: height 0.15s;
+  }
+  .seek-track:hover { height: 6px; }
+  .seek-buf {
+    position: absolute; top: 0; left: 0; height: 100%; border-radius: 2px;
+    background: rgba(255,255,255,0.3); pointer-events: none;
+  }
+  .seek-fill {
+    position: absolute; top: 0; left: 0; height: 100%; border-radius: 2px;
+    background: var(--primary, #f59e0b); pointer-events: none;
+    display: flex; align-items: center; justify-content: flex-end;
+  }
+  .seek-thumb {
+    width: 12px; height: 12px; border-radius: 50%;
+    background: var(--primary, #f59e0b);
+    box-shadow: 0 0 4px rgba(0,0,0,0.5);
+    flex-shrink: 0; margin-right: -6px;
+    opacity: 0; transition: opacity 0.15s;
+  }
+  .seek-track:hover .seek-thumb { opacity: 1; }
+
+  .ctrl-row {
+    display: flex; align-items: center; gap: 8px;
+    height: 32px;
+  }
+  .ctrl-btn {
+    background: none; border: none; color: #fff;
+    cursor: pointer; padding: 4px; border-radius: 4px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    transition: background 0.1s;
+  }
+  .ctrl-btn:hover { background: rgba(255,255,255,0.15); }
+  .ctrl-btn svg { width: 18px; height: 18px; }
+
+  .ctrl-time {
+    font-size: 11px; color: rgba(255,255,255,0.85);
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .ctrl-spacer { flex: 1; }
 
   .torrent-waiting {
     height: 300px; display: flex; flex-direction: column;
@@ -1715,10 +1971,8 @@
 
   /* ── CC button (in-player subtitle selector) ── */
   .cc-wrap {
-    position: absolute;
-    bottom: 54px;
-    right: 10px;
-    z-index: 20;
+    position: relative;
+    flex-shrink: 0;
   }
 
   .cc-btn {
@@ -1737,6 +1991,18 @@
   .cc-btn svg { width: 14px; height: 14px; }
   .cc-btn:hover { background: rgba(0,0,0,0.85); color: #fff; border-color: rgba(255,255,255,0.5); }
   .cc-btn.cc-active { background: var(--primary, #f59e0b); color: #000; border-color: var(--primary, #f59e0b); }
+  .cc-btn.cc-detect { opacity: 0.7; }
+  .cc-btn.cc-detect:hover { opacity: 1; }
+  .cc-btn:disabled { cursor: wait; }
+
+  .cc-spinner {
+    width: 12px; height: 12px;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    flex-shrink: 0;
+  }
 
   .cc-menu {
     position: absolute;

@@ -259,20 +259,23 @@ pub async fn torrent_status(torrent_id: usize) -> Result<TorrentStatus, String> 
 
 #[derive(Serialize, Clone)]
 pub struct SubtitleTrack {
-    pub index: u32,
-    pub lang:  String,
-    pub title: String,
-    pub url:   String,
+    pub index:  u32,
+    pub lang:   String,
+    pub title:  String,
+    pub url:    String,
+    pub codec:  String,  // "ass", "subrip", "webvtt", etc.
 }
 
 #[derive(Serialize)]
 pub struct TransmuxResult {
-    pub video_url: String,
-    pub subs:      Vec<SubtitleTrack>,
+    pub video_url:     String,
+    pub subs:          Vec<SubtitleTrack>,
+    pub duration_secs: f64,
+    pub bitmap_subs:   u32,  // pistas bitmap encontradas pero no soportadas (PGS, DVDSUB...)
 }
 
 async fn ensure_transmux_server() -> Result<u16, String> {
-    use axum::{Router, routing::get, extract::Path, response::{Response, IntoResponse}, body::Body, http::StatusCode};
+    use axum::{Router, routing::get, extract::{Path, Query}, response::{Response, IntoResponse}, body::Body, http::StatusCode};
     use tokio_util::io::ReaderStream;
 
     if let Some(&p) = TRANSMUX_PORT.get() { return Ok(p); }
@@ -280,25 +283,34 @@ async fn ensure_transmux_server() -> Result<u16, String> {
     let listener = TcpListener::bind("127.0.0.1:0").await.map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
 
-    async fn h_video(Path(id): Path<String>) -> Result<Response, StatusCode> {
+    // ?start=segundos  →  ffmpeg recibe -ss antes de -i para saltar al punto pedido
+    async fn h_video(
+        Path(id): Path<String>,
+        Query(params): Query<std::collections::HashMap<String, String>>,
+    ) -> Result<Response, StatusCode> {
+        let start: f64 = params.get("start").and_then(|s| s.parse().ok()).unwrap_or(0.0);
         let src = transmux_sources().lock().await.get(&id).map(|s| s.url.clone()).ok_or(StatusCode::NOT_FOUND)?;
+
+        let start_str = format!("{:.3}", start);
+        let mut args: Vec<&str> = vec![
+            "-hide_banner", "-loglevel", "info",
+            "-fflags", "+genpts+nobuffer",
+            "-analyzeduration", "10M", "-probesize", "10M",
+        ];
+        // -ss antes de -i = seek rápido por keyframe (el navegador pide el rango correspondiente)
+        if start > 0.5 { args.extend(["-ss", &start_str]); }
+        args.extend([
+            "-i", &src,
+            "-map", "0:v:0", "-map", "0:a:0?",
+            "-c:v", "copy",
+            "-c:a", "aac", "-b:a", "160k", "-ac", "2",
+            "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
+            "-frag_duration", "2000000",
+            "-f", "mp4", "pipe:1",
+        ]);
+
         let mut child = cmd_async(ff_bin("ffmpeg"))
-            .args([
-                "-hide_banner",
-                "-loglevel", "info",
-                "-fflags", "+genpts+nobuffer",
-                "-analyzeduration", "10M",
-                "-probesize", "10M",
-                "-i", &src,
-                "-map", "0:v:0",
-                "-map", "0:a:0?",
-                "-c:v", "copy",
-                "-c:a", "aac", "-b:a", "160k", "-ac", "2",
-                "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
-                "-frag_duration", "2000000",
-                "-f", "mp4",
-                "pipe:1",
-            ])
+            .args(&args)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true)
@@ -334,26 +346,39 @@ async fn ensure_transmux_server() -> Result<u16, String> {
             .as_ref()
             .filter(|p| p.exists())
             .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or(src.url);
+            .unwrap_or(src.url.clone());
 
-        // Subtítulos son pequeños (<100 KB) → .output() es más fiable que streaming
+        let is_http = input.starts_with("http");
+        let mut args: Vec<String> = vec!["-loglevel".into(), "error".into()];
+        if is_http {
+            args.extend([
+                "-fflags".into(), "+ignidx+nobuffer".into(),
+                "-analyzeduration".into(), "60M".into(),
+                "-probesize".into(), "50M".into(),
+            ]);
+        }
+        args.extend([
+            "-i".into(), input,
+            "-map".into(), format!("0:s:{}", idx),
+            "-f".into(), "webvtt".into(),
+            "pipe:1".into(),
+        ]);
+
         let out = tokio::time::timeout(
-            std::time::Duration::from_secs(20),
+            std::time::Duration::from_secs(60),
             cmd_async(ff_bin("ffmpeg"))
-                .args([
-                    "-loglevel", "error",
-                    "-i", &input,
-                    "-map", &format!("0:s:{}", idx),
-                    "-f", "webvtt",
-                    "pipe:1",
-                ])
+                .args(&args)
                 .output(),
         )
         .await
         .map_err(|_| StatusCode::GATEWAY_TIMEOUT)?
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        if out.stdout.is_empty() { return Err(StatusCode::NO_CONTENT); }
+        if out.stdout.is_empty() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            eprintln!("[h_sub] ffmpeg stderr (idx={}): {}", idx, stderr);
+            return Err(StatusCode::NO_CONTENT);
+        }
 
         Ok((
             [
@@ -422,26 +447,58 @@ pub async fn torrent_transmux(torrent_id: usize, file_idx: usize) -> Result<Tran
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or(source_url.clone());
 
-    let subs = probe_subtitles(&probe_input, &session_id, transmux_port).await.unwrap_or_default();
+    // Ejecutar en paralelo: pistas de subtítulos + duración total
+    let (probe_result, duration_secs) = tokio::join!(
+        probe_subtitles(&probe_input, &session_id, transmux_port),
+        probe_duration(&probe_input),
+    );
+    let (subs, bitmap_subs) = probe_result.unwrap_or_default();
 
     Ok(TransmuxResult {
         video_url: format!("http://127.0.0.1:{}/transmux/{}/video", transmux_port, session_id),
         subs,
+        duration_secs,
+        bitmap_subs,
     })
 }
 
-async fn probe_subtitles(source_url: &str, session_id: &str, port: u16) -> Result<Vec<SubtitleTrack>, String> {
-    let source = source_url.to_string();
+/// Obtiene la duración del archivo en segundos via ffprobe.
+async fn probe_duration(source: &str) -> f64 {
+    let is_http = source.starts_with("http");
+    let mut args: Vec<&str> = vec!["-v", "quiet", "-print_format", "json", "-show_entries", "format=duration"];
+    if is_http { args.extend(["-fflags", "+ignidx+nobuffer"]); }
+    args.push(source);
+
     let out = tokio::time::timeout(
-        std::time::Duration::from_secs(30),
+        std::time::Duration::from_secs(20),
+        cmd_async(ff_bin("ffprobe")).args(&args).output(),
+    )
+    .await
+    .ok()
+    .and_then(|r| r.ok());
+
+    out.and_then(|o| {
+        let json: serde_json::Value = serde_json::from_slice(&o.stdout).ok()?;
+        json["format"]["duration"].as_str()?.parse::<f64>().ok()
+    })
+    .unwrap_or(0.0)
+}
+
+async fn probe_subtitles(source_url: &str, session_id: &str, port: u16) -> Result<(Vec<SubtitleTrack>, u32), String> {
+    let source = source_url.to_string();
+    // Para streams HTTP (descarga parcial) necesitamos ignorar el índice MKV y
+    // analizar más datos para que ffprobe detecte las pistas de subtítulos.
+    let is_http = source.starts_with("http");
+    let mut args: Vec<&str> = vec!["-v", "quiet", "-print_format", "json"];
+    if is_http {
+        args.extend(&["-fflags", "+ignidx+nobuffer", "-analyzeduration", "60M", "-probesize", "50M"]);
+    }
+    args.extend(&["-show_streams", "-select_streams", "s", &source]);
+
+    let out = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
         cmd_async(ff_bin("ffprobe"))
-            .args([
-                "-v", "quiet",
-                "-print_format", "json",
-                "-show_streams",
-                "-select_streams", "s",
-                &source,
-            ])
+            .args(&args)
             .output(),
     )
     .await
@@ -456,9 +513,10 @@ async fn probe_subtitles(source_url: &str, session_id: &str, port: u16) -> Resul
     let streams = json.get("streams").and_then(|s| s.as_array()).cloned().unwrap_or_default();
 
     let mut subs = Vec::new();
+    let mut bitmap_count = 0u32;
     for (i, s) in streams.iter().enumerate() {
         let codec = s.get("codec_name").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
-        if BITMAP_CODECS.iter().any(|&c| codec == c) { continue; }
+        if BITMAP_CODECS.iter().any(|&c| codec == c) { bitmap_count += 1; continue; }
         let tags  = s.get("tags");
         let lang  = tags.and_then(|t| t.get("language")).and_then(|v| v.as_str()).unwrap_or("").to_string();
         let title = tags.and_then(|t| t.get("title")).and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -466,10 +524,33 @@ async fn probe_subtitles(source_url: &str, session_id: &str, port: u16) -> Resul
             index: i as u32,
             lang,
             title,
-            url: format!("http://127.0.0.1:{}/transmux/{}/sub/{}", port, session_id, i),
+            url:   format!("http://127.0.0.1:{}/transmux/{}/sub/{}", port, session_id, i),
+            codec: codec.clone(),
         });
     }
-    Ok(subs)
+    Ok((subs, bitmap_count))
+}
+
+/// Re-detecta pistas de subtítulos para un torrent ya en reproducción.
+/// Útil cuando el archivo estaba parcialmente descargado durante el transmux inicial.
+#[tauri::command]
+pub async fn torrent_probe_subs(torrent_id: usize, file_idx: usize) -> Result<(Vec<SubtitleTrack>, u32), String> {
+    let transmux_port = *TRANSMUX_PORT.get().ok_or("Servidor transmux no iniciado")?;
+    let session_id = format!("{}-{}", torrent_id, file_idx);
+
+    let src = transmux_sources()
+        .lock().await
+        .get(&session_id)
+        .cloned()
+        .ok_or("Sesión transmux no encontrada — reproduce el torrent primero")?;
+
+    let probe_input = src.path
+        .as_ref()
+        .filter(|p| p.exists())
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or(src.url);
+
+    probe_subtitles(&probe_input, &session_id, transmux_port).await
 }
 
 /// Abre una URL en un reproductor externo — mpv en Linux, VLC en Windows.
