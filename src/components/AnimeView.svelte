@@ -253,6 +253,7 @@
         // NO usamos episode_count (total planificado de la serie, puede ser
         // muy alto para series en curso) ni kitsuDbTotal (conteo de la DB).
         const maxAired = Math.max(maxKitsu, maxKitsuDb, maxAniList, anilistMaxAired);
+        console.log('[eps] maxKitsu', maxKitsu, 'maxKitsuDb', maxKitsuDb, 'maxAniList', maxAniList, 'anilistMaxAired', anilistMaxAired, '→ maxAired', maxAired);
         const cap = maxAired > 0 ? maxAired + 5 : Infinity;
 
         // Kitsu puede tener la base desactualizada para series muy largas.
