@@ -36,6 +36,7 @@ fn ff_bin(name: &str) -> std::path::PathBuf {
 }
 
 fn cmd_sync(prog: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    #[allow(unused_mut)]
     let mut c = std::process::Command::new(prog);
     #[cfg(windows)]
     { use std::os::windows::process::CommandExt; c.creation_flags(0x08000000); }
@@ -43,6 +44,7 @@ fn cmd_sync(prog: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
 }
 
 fn cmd_async(prog: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
+    #[allow(unused_mut)]
     let mut c = tokio::process::Command::new(prog);
     #[cfg(windows)]
     { use std::os::windows::process::CommandExt; c.creation_flags(0x08000000); }
@@ -265,7 +267,6 @@ pub struct TransmuxResult {
 async fn ensure_transmux_server() -> Result<u16, String> {
     use axum::{Router, routing::get, extract::Path, response::{Response, IntoResponse}, body::Body, http::StatusCode};
     use tokio_util::io::ReaderStream;
-    use tokio::process::Command as TokioCommand;
 
     if let Some(&p) = TRANSMUX_PORT.get() { return Ok(p); }
 
