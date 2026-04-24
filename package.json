@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "tauri-dev": "env -u WAYLAND_DISPLAY GDK_BACKEND=x11 WEBKIT_DISABLE_DMABUF_RENDERER=1 tauri dev"
+    "tauri-dev": "env -u WAYLAND_DISPLAY GDK_BACKEND=x11 WEBKIT_DISABLE_DMABUF_RENDERER=1 LIBGL_ALWAYS_SOFTWARE=1 tauri dev"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.0",
