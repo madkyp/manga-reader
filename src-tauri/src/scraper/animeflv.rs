@@ -84,16 +84,25 @@ pub struct AnimeStream {
 
 const ANILIST: &str = "https://graphql.anilist.co";
 
-// Devuelve fechas de los últimos 50 episodios + el total emitido hasta hoy.
-// nextAiringEpisode.episode − 1 = último emitido para series en curso.
-// episodes = conteo total para series completadas.
-const AIRING_QUERY: &str = r#"
-query($s:String,$page:Int){
+// Dos queries separadas:
+// 1. PEAK: obtiene el episodio más alto emitido con sort TIME_DESC perPage:1
+// 2. DATES: fechas recientes (últimas 2 páginas DESC) para mostrar en UI
+const PEAK_QUERY: &str = r#"
+query($s:String){
   Media(search:$s,type:ANIME){
     episodes
     nextAiringEpisode{ episode }
-    airingSchedule(notYetAired:false,page:$page,perPage:50){
-      pageInfo{ hasNextPage currentPage }
+    airingSchedule(notYetAired:false,sort:TIME_DESC,perPage:1){
+      nodes{ episode airingAt }
+    }
+  }
+}"#;
+
+const DATES_QUERY: &str = r#"
+query($s:String,$page:Int){
+  Media(search:$s,type:ANIME){
+    airingSchedule(notYetAired:false,sort:TIME_DESC,page:$page,perPage:50){
+      pageInfo{ hasNextPage }
       nodes{ episode airingAt }
     }
   }
@@ -133,52 +142,72 @@ pub fn anilist_episode_dates(title: String) -> Result<String, String> {
     let mut map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let mut max_aired: u64 = 0;
 
-    // Paginar hasta 10 páginas × 50 = 500 episodios con fecha
-    for page in 1u32..=10 {
+    // ── Paso 1: obtener el episodio más alto emitido con una sola petición ──
+    // TIME_DESC perPage:1 → el primer nodo ES el episodio más reciente.
+    {
         let body = serde_json::json!({
-            "query": AIRING_QUERY,
-            "variables": { "s": title, "page": page }
+            "query": PEAK_QUERY,
+            "variables": { "s": &title }
         });
-        let resp = client
+        if let Ok(resp) = client
             .post(ANILIST)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
             .json(&body)
             .send()
-            .map_err(|e| e.to_string())?;
-        if !resp.status().is_success() {
-            break; // Si falla alguna página, usar lo que hay
-        }
-        let data: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
-        let media = &data["data"]["Media"];
+        {
+            if let Ok(data) = resp.json::<serde_json::Value>() {
+                let media = &data["data"]["Media"];
 
-        // Total de episodios de la serie (para series completadas)
-        if let Some(n) = media["episodes"].as_u64() {
-            max_aired = max_aired.max(n);
+                // Series completadas: campo episodes directo
+                if let Some(n) = media["episodes"].as_u64() {
+                    max_aired = max_aired.max(n);
+                }
+                // Series en curso: próximo episodio − 1
+                if let Some(next) = media["nextAiringEpisode"]["episode"].as_u64() {
+                    if next > 1 { max_aired = max_aired.max(next - 1); }
+                }
+                // Último emitido según el schedule (más fiable para series largas)
+                if let Some(nodes) = media["airingSchedule"]["nodes"].as_array() {
+                    for node in nodes {
+                        if let Some(ep) = node["episode"].as_u64() {
+                            max_aired = max_aired.max(ep);
+                        }
+                    }
+                }
+            }
         }
-        // nextAiringEpisode.episode − 1 = último emitido (series en curso)
-        if let Some(next) = media["nextAiringEpisode"]["episode"].as_u64() {
-            if next > 1 { max_aired = max_aired.max(next - 1); }
-        }
+    }
 
-        let schedule = &media["airingSchedule"];
+    // ── Paso 2: obtener fechas recientes (hasta 4 páginas DESC = últimos 200 eps) ──
+    for page in 1u32..=4 {
+        let body = serde_json::json!({
+            "query": DATES_QUERY,
+            "variables": { "s": &title, "page": page }
+        });
+        let Ok(resp) = client
+            .post(ANILIST)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .json(&body)
+            .send()
+        else { break };
+        if !resp.status().is_success() { break; }
+        let Ok(data) = resp.json::<serde_json::Value>() else { break };
+        let schedule = &data["data"]["Media"]["airingSchedule"];
+
         if let Some(nodes) = schedule["nodes"].as_array() {
             for node in nodes {
                 if let (Some(ep), Some(ts)) = (node["episode"].as_u64(), node["airingAt"].as_i64()) {
                     map.insert(ep.to_string(), ts_to_date(ts));
-                    // El episodio más alto visto en el schedule = último emitido conocido
                     max_aired = max_aired.max(ep);
                 }
             }
         }
-
-        // Detenerse si no hay más páginas
         let has_next = schedule["pageInfo"]["hasNextPage"].as_bool().unwrap_or(false);
         if !has_next { break; }
     }
 
-    // Incluir el total emitido en la respuesta para que el frontend
-    // pueda sintetizar los episodios que Kitsu no tiene.
     #[derive(serde::Serialize)]
     struct AniListResult {
         dates: std::collections::HashMap<String, String>,

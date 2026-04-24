@@ -236,18 +236,26 @@
         const today = new Date().toISOString().split('T')[0];
         const rawEps = (r.episodes ?? []).map(kitsuEpToUnified);
 
-        // Máximo desde fechas de Kitsu
+        // Máximo desde fechas de Kitsu (solo eps emitidos)
         const maxKitsu = rawEps
           .filter(ep => ep.airdate && ep.airdate <= today)
           .reduce((max, ep) => Math.max(max, ep.number), 0);
+
+        // Máximo ep conocido en la DB de Kitsu (independiente de fecha)
+        const maxKitsuDb = rawEps.reduce((max, ep) => Math.max(max, ep.number), 0);
 
         // Máximo desde fechas de AniList (suelen estar más al día)
         const maxAniList = Object.keys(allDates).reduce((max, k) => {
           const n = parseInt(k); return isNaN(n) ? max : Math.max(max, n);
         }, 0);
 
+        // episode_count del detalle de Kitsu (campo oficial, más fiable para series largas)
         const maxEpCount = base.episode_count ?? 0;
-        const maxAired = Math.max(maxKitsu, maxAniList, anilistMaxAired, maxEpCount);
+
+        // kitsu_episodes también devuelve el total de eps en su DB
+        const kitsuDbTotal = r.total ?? 0;
+
+        const maxAired = Math.max(maxKitsu, maxKitsuDb, maxAniList, anilistMaxAired, maxEpCount, kitsuDbTotal);
         const cap = maxAired > 0 ? maxAired + 20 : Infinity;
 
         // Kitsu puede tener la base desactualizada para series muy largas.
