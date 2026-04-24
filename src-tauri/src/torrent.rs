@@ -35,6 +35,20 @@ fn ff_bin(name: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(name)
 }
 
+fn cmd_sync(prog: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    let mut c = std::process::Command::new(prog);
+    #[cfg(windows)]
+    { use std::os::windows::process::CommandExt; c.creation_flags(0x08000000); }
+    c
+}
+
+fn cmd_async(prog: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
+    let mut c = tokio::process::Command::new(prog);
+    #[cfg(windows)]
+    { use std::os::windows::process::CommandExt; c.creation_flags(0x08000000); }
+    c
+}
+
 static SESSION: OnceLock<std::sync::Arc<Session>> = OnceLock::new();
 static API_PORT: OnceLock<u16> = OnceLock::new();
 static INIT_LOCK: Mutex<bool> = Mutex::const_new(false);
@@ -260,7 +274,7 @@ async fn ensure_transmux_server() -> Result<u16, String> {
 
     async fn h_video(Path(id): Path<String>) -> Result<Response, StatusCode> {
         let src = transmux_sources().lock().await.get(&id).map(|s| s.url.clone()).ok_or(StatusCode::NOT_FOUND)?;
-        let mut child = TokioCommand::new(ff_bin("ffmpeg"))
+        let mut child = cmd_async(ff_bin("ffmpeg"))
             .args([
                 "-hide_banner",
                 "-loglevel", "info",
@@ -317,7 +331,7 @@ async fn ensure_transmux_server() -> Result<u16, String> {
         // Subtítulos son pequeños (<100 KB) → .output() es más fiable que streaming
         let out = tokio::time::timeout(
             std::time::Duration::from_secs(20),
-            TokioCommand::new(ff_bin("ffmpeg"))
+            cmd_async(ff_bin("ffmpeg"))
                 .args([
                     "-loglevel", "error",
                     "-i", &input,
@@ -362,7 +376,7 @@ pub async fn torrent_transmux(torrent_id: usize, file_idx: usize) -> Result<Tran
     for name in ["ffmpeg", "ffprobe"] {
         let path = ff_bin(name);
         let exists = path.exists();
-        let ok = exists && std::process::Command::new(&path)
+        let ok = exists && cmd_sync(&path)
             .arg("-version")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -415,7 +429,7 @@ async fn probe_subtitles(source_url: &str, session_id: &str, port: u16) -> Resul
     let source = source_url.to_string();
     let out = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        tokio::process::Command::new(ff_bin("ffprobe"))
+        cmd_async(ff_bin("ffprobe"))
             .args([
                 "-v", "quiet",
                 "-print_format", "json",
@@ -476,7 +490,7 @@ pub fn torrent_open_external(url: String) -> Result<String, String> {
         candidates.push("mpv".to_string());
 
         for p in &candidates {
-            if std::process::Command::new(p).arg(&url).spawn().is_ok() {
+            if cmd_sync(p).arg(&url).spawn().is_ok() {
                 let name = std::path::Path::new(p)
                     .file_stem()
                     .and_then(|s| s.to_str())
@@ -486,7 +500,7 @@ pub fn torrent_open_external(url: String) -> Result<String, String> {
         }
 
         // Fallback: abrir con el reproductor predeterminado de Windows
-        return std::process::Command::new("cmd")
+        return cmd_sync("cmd")
             .args(["/C", "start", "", url.as_str()])
             .spawn()
             .map(|_| "default".to_string())
