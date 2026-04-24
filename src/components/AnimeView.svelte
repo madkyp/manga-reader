@@ -330,6 +330,7 @@
       needsExternal: false,
       loading: true,
     };
+    transmuxOffset = 0;
     videoCurrent = 0;
 
     let result = null;
@@ -454,6 +455,7 @@
     clearInterval(torrentPollId);
     torrentPlayer = null;
     activeSub = null;
+    transmuxOffset = 0;
     videoCurrent = 0;
   }
 
@@ -515,6 +517,10 @@
   let showControls    = $state(true);
   let seekLoading     = $state(false);
   let hideTimer       = null;
+  // Offset del transmux: tiempo absoluto del archivo donde empieza el stream actual.
+  // Tras cada seek, ffmpeg arranca en el keyframe más cercano (no en el tiempo pedido);
+  // este offset es el tiempo real del keyframe, que obtenemos con transmux_nearest_keyframe.
+  let transmuxOffset  = $state(0);
 
   function revealControls() {
     showControls = true;
@@ -527,7 +533,7 @@
     if (videoEl.paused) videoEl.play(); else videoEl.pause();
   }
 
-  function seekTo(e) {
+  async function seekTo(e) {
     const dur = videoDuration;
     if (!videoEl || dur <= 0) return;
     const rect = e.currentTarget.getBoundingClientRect();
@@ -535,17 +541,28 @@
     const targetTime = pct * dur;
 
     if (torrentPlayer?._transmuxBase) {
-      // Transmux: reiniciar ffmpeg desde la nueva posición. Con -copyts los
-      // timestamps del stream serán absolutos, así que videoEl.currentTime
-      // reflejará el tiempo real del archivo automáticamente.
       seekLoading = true;
       videoCurrent = targetTime;
-      const newSrc = `${torrentPlayer._transmuxBase}?start=${targetTime.toFixed(3)}`;
+      // Preguntar a ffprobe cuál será el keyframe real donde arranque ffmpeg.
+      // Así transmuxOffset = tiempo REAL del stream, no el pedido → subs alineados.
+      let actualStart = targetTime;
+      try {
+        actualStart = await tauri('transmux_nearest_keyframe', {
+          torrentId: torrentPlayer.torrentId,
+          fileIdx:   torrentPlayer._fileIdx ?? 0,
+          target:    targetTime,
+        });
+        if (!actualStart || actualStart <= 0) actualStart = targetTime;
+      } catch {
+        actualStart = targetTime;
+      }
+      transmuxOffset = actualStart;
+      const newSrc = `${torrentPlayer._transmuxBase}?start=${actualStart.toFixed(3)}`;
       videoEl.src = newSrc;
       videoEl.load();
       videoEl.play().catch(() => {});
     } else {
-      // Stream directo (MP4/WebM): el navegador hace un Range request a librqbit
+      transmuxOffset = 0;
       videoEl.currentTime = targetTime;
     }
   }
@@ -636,10 +653,12 @@
   }
 
   function onTimeUpdate(e) {
-    // Con -copyts en ffmpeg, currentTime es absoluto (tiempo del archivo original)
-    const t = e.currentTarget.currentTime;
-    videoCurrent = t;
-    const cue = subCues.find(c => t >= c.start && t <= c.end);
+    // realT = tiempo absoluto del archivo. El stream de ffmpeg empieza en 0 tras
+    // cada seek; transmuxOffset es el tiempo real del keyframe donde arrancó.
+    const streamT = e.currentTarget.currentTime;
+    const realT = transmuxOffset + streamT;
+    videoCurrent = realT;
+    const cue = subCues.find(c => realT >= c.start && realT <= c.end);
     currentSubLine = cue ? cue.text : '';
   }
 

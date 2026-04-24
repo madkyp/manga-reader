@@ -66,6 +66,11 @@ fn health_check() -> String {
 }
 
 #[tauri::command]
+fn write_text_file(path: String, content: String) -> Result<(), String> {
+    std::fs::write(&path, content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn anime_ping() -> Result<String, String> {
     let client = reqwest::Client::builder()
         .user_agent("Mozilla/5.0")
@@ -169,6 +174,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             health_check,
+            write_text_file,
             anime_ping,
             get_home_updates,
             // OlympusScans
@@ -223,6 +229,8 @@ pub fn run() {
             torrent::torrent_remove,
             torrent::torrent_open_external,
             torrent::torrent_transmux,
+            torrent::torrent_probe_subs,
+            torrent::transmux_nearest_keyframe,
             // AnimeFLV
             scraper::animeflv::animeflv_latest,
             scraper::animeflv::animeflv_browse,

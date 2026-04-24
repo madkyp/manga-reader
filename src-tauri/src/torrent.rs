@@ -294,17 +294,14 @@ async fn ensure_transmux_server() -> Result<u16, String> {
         let start_str = format!("{:.3}", start);
         let mut args: Vec<&str> = vec![
             "-hide_banner", "-loglevel", "info",
-            "-fflags", "+nobuffer",
+            "-fflags", "+genpts+nobuffer",
             "-analyzeduration", "10M", "-probesize", "10M",
         ];
-        // -ss antes de -i = seek rápido por keyframe
+        // -ss antes de -i = seek rápido por keyframe (el frontend pregunta el
+        // keyframe real con transmux_nearest_keyframe para calcular el offset)
         if start > 0.5 { args.extend(["-ss", &start_str]); }
         args.extend([
             "-i", &src,
-            // -copyts: preservar timestamps del archivo original. Así el browser
-            // sabe que el stream empieza en t=X (keyframe real) y videoEl.currentTime
-            // refleja el tiempo absoluto del archivo — los subs matchean sin offset.
-            "-copyts",
             "-map", "0:v:0", "-map", "0:a:0?",
             "-c:v", "copy",
             "-c:a", "aac", "-b:a", "160k", "-ac", "2",
@@ -611,6 +608,60 @@ pub async fn torrent_probe_subs(torrent_id: usize, file_idx: usize) -> Result<(V
         .unwrap_or(src.url);
 
     probe_subtitles(&probe_input, &session_id, transmux_port).await
+}
+
+/// Busca el keyframe más cercano <= target con ffprobe, para calcular el
+/// offset real del seek (ffmpeg -ss solo puede empezar en keyframes).
+/// Devuelve el tiempo real en segundos del keyframe donde arrancará el stream.
+#[tauri::command]
+pub async fn transmux_nearest_keyframe(torrent_id: usize, file_idx: usize, target: f64) -> Result<f64, String> {
+    let session_id = format!("{}-{}", torrent_id, file_idx);
+    let src = transmux_sources()
+        .lock().await
+        .get(&session_id)
+        .cloned()
+        .ok_or("Sesión transmux no encontrada")?;
+
+    let input = src.path
+        .as_ref()
+        .filter(|p| p.exists())
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or(src.url);
+
+    // Buscar keyframes en una ventana de 30s antes del target.
+    // Los GOPs de anime suelen ser de 10s máx, 30s da margen suficiente.
+    let window_start = (target - 30.0).max(0.0);
+    let interval = format!("{}%{}", window_start, target + 0.5);
+
+    let out = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        cmd_async(ff_bin("ffprobe"))
+            .args([
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-skip_frame", "nokey",
+                "-show_entries", "frame=pts_time",
+                "-read_intervals", &interval,
+                "-of", "csv=p=0",
+                &input,
+            ])
+            .output(),
+    )
+    .await
+    .map_err(|_| "ffprobe timeout".to_string())?
+    .map_err(|e| format!("ffprobe: {}", e))?;
+
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut best = 0.0_f64;
+    for line in text.lines() {
+        let trimmed = line.trim().trim_end_matches(',');
+        if let Ok(t) = trimmed.parse::<f64>() {
+            if t <= target && t > best {
+                best = t;
+            }
+        }
+    }
+    Ok(best)
 }
 
 /// Abre una URL en un reproductor externo — mpv en Linux, VLC en Windows.
