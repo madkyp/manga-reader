@@ -166,6 +166,8 @@ pub fn anilist_episode_dates(title: String) -> Result<String, String> {
             for node in nodes {
                 if let (Some(ep), Some(ts)) = (node["episode"].as_u64(), node["airingAt"].as_i64()) {
                     map.insert(ep.to_string(), ts_to_date(ts));
+                    // El episodio más alto visto en el schedule = último emitido conocido
+                    max_aired = max_aired.max(ep);
                 }
             }
         }

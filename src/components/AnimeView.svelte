@@ -259,10 +259,9 @@
           for (let n = maxKitsu + 1; n <= maxAired; n++) {
             const dateKey = String(n);
             const airdate = allDates[dateKey] ?? null;
-            // Solo incluir si ya tiene fecha de emisión o es un ep conocido por conteo
-            if (airdate || maxEpCount >= n) {
-              synthEps.push({ id: `synth-${n}`, number: n, title: null, airdate, thumbnail: null });
-            }
+            // Sintetizar siempre que el techo venga de AniList (max_aired)
+            // o que Kitsu confirme ese número con episode_count
+            synthEps.push({ id: `synth-${n}`, number: n, title: null, airdate, thumbnail: null });
           }
         }
 
