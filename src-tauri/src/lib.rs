@@ -215,6 +215,7 @@ pub fn run() {
             scraper::kitsu::kitsu_episodes,
             // Nyaa.si torrents
             scraper::nyaa::nyaa_search,
+            scraper::nyaa::nyaa_direct,
             scraper::nyaa::nyaa_torrent_info,
             // Torrent streaming
             torrent::torrent_start,

@@ -6,12 +6,13 @@
     return invoke(cmd, args);
   }
 
-  let results    = $state([]);
-  let loading    = $state(true);
-  let error      = $state('');
-  let selected   = $state(null);
-  let fileInfo   = $state(null);
+  let results      = $state([]);
+  let loading      = $state(true);
+  let error        = $state('');
+  let selected     = $state(null);
+  let fileInfo     = $state(null);
   let loadingFiles = $state(false);
+  let activeTab    = $state('nyaa'); // 'animetosho' | 'nyaa'
 
   const epStr = episodeNumber != null ? String(episodeNumber) : null;
   const epPadded = epStr != null
@@ -21,23 +22,42 @@
 
   let manualQuery = $state(autoQuery);
 
-  $effect(() => { search(autoQuery); });
+  $effect(() => { search(autoQuery, activeTab); });
 
-  async function search(q) {
+  function isMultiSub(title) {
+    const t = title.toLowerCase();
+    return t.includes('[subsplease]') || t.includes('[erai-raws]') ||
+           t.includes('multi sub') || t.includes('multisub') ||
+           t.includes('multi-sub') || t.includes('[multi]') ||
+           t.includes('multiple sub');
+  }
+
+  async function search(q, tab) {
     loading = true; error = ''; results = []; selected = null; fileInfo = null;
     try {
-      let res = await tauri('nyaa_search', { query: q.trim(), category: '1_2' });
-      // Si no hay resultados y la query incluye episodio, reintentar solo con el título
-      if (res.length === 0 && epPadded != null) {
-        res = await tauri('nyaa_search', { query: animeTitle.trim(), category: '1_2' });
+      let res;
+      if (tab === 'nyaa') {
+        res = await tauri('nyaa_direct', { query: q.trim() });
+        if (res.length === 0 && epPadded != null)
+          res = await tauri('nyaa_direct', { query: animeTitle.trim() });
+      } else {
+        res = await tauri('nyaa_search', { query: q.trim(), category: '1_2' });
+        if (res.length === 0 && epPadded != null)
+          res = await tauri('nyaa_search', { query: animeTitle.trim(), category: '1_2' });
       }
       results = res;
-      if (results.length === 0) error = 'Sin resultados en AnimeToSho para esta búsqueda.';
+      if (results.length === 0) error = 'Sin resultados para esta búsqueda.';
     } catch(e) {
       error = String(e);
     } finally {
       loading = false;
     }
+  }
+
+  function switchTab(tab) {
+    if (tab === activeTab) return;
+    activeTab = tab;
+    search(manualQuery, tab);
   }
 
   async function selectTorrent(r) {
@@ -90,15 +110,25 @@
       <button class="close-btn" onclick={onClose}>✕</button>
     </div>
 
+    <!-- Tabs -->
+    <div class="tabs">
+      <button class="tab" class:active={activeTab === 'nyaa'} onclick={() => switchTab('nyaa')}>
+        Nyaa.si
+      </button>
+      <button class="tab" class:active={activeTab === 'animetosho'} onclick={() => switchTab('animetosho')}>
+        AnimeToSho
+      </button>
+    </div>
+
     <div class="search-bar">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
       <input
         type="text"
         bind:value={manualQuery}
-        onkeydown={(e) => e.key === 'Enter' && search(manualQuery)}
+        onkeydown={(e) => e.key === 'Enter' && search(manualQuery, activeTab)}
         placeholder="Buscar torrents…"
       />
-      <button onclick={() => search(manualQuery)}>Buscar</button>
+      <button onclick={() => search(manualQuery, activeTab)}>Buscar</button>
     </div>
 
     <div class="body">
@@ -141,6 +171,7 @@
             <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
             <div class="result-row" onclick={() => selectTorrent(r)}>
               <div class="result-left">
+                {#if isMultiSub(r.title)}<span class="tag multisub">Multi Sub</span>{/if}
                 {#if groupTag(r.title)}<span class="tag group">{groupTag(r.title)}</span>{/if}
                 {#if qualityTag(r.title)}<span class="tag quality">{qualityTag(r.title)}</span>{/if}
                 <span class="result-title">{r.title.replace(/^\[[^\]]+\]\s*/, '')}</span>
@@ -205,6 +236,22 @@
     font-size: 14px; cursor: pointer; padding: 4px 8px; border-radius: 4px; flex-shrink: 0;
   }
 
+  /* ── Tabs ── */
+  .tabs {
+    display: flex; gap: 0;
+    border-bottom: 1px solid var(--outline-dim);
+    flex-shrink: 0;
+  }
+
+  .tab {
+    flex: 1; padding: 9px 0; border: none; background: none;
+    color: var(--text-muted); font-size: 12px; font-weight: 600;
+    cursor: pointer; border-bottom: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--primary, #f59e0b); border-bottom-color: var(--primary, #f59e0b); }
+
   .body { flex: 1; overflow-y: auto; }
 
   .centered {
@@ -241,8 +288,9 @@
     padding: 1px 5px; border-radius: 3px;
     flex-shrink: 0; white-space: nowrap;
   }
-  .tag.group   { background: rgba(99,102,241,0.15); color: #818cf8; }
-  .tag.quality { background: rgba(16,185,129,0.15); color: #34d399; }
+  .tag.multisub { background: rgba(245,158,11,0.2); color: var(--primary, #f59e0b); }
+  .tag.group    { background: rgba(99,102,241,0.15); color: #818cf8; }
+  .tag.quality  { background: rgba(16,185,129,0.15); color: #34d399; }
 
   .result-right {
     display: flex; align-items: center; gap: 10px;

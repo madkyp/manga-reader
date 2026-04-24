@@ -85,6 +85,47 @@ pub fn nyaa_search(query: String, _category: Option<String>) -> Result<Vec<NyaaR
         Some(NyaaResult { id, title, torrent, magnet, size, seeders, leechers, date, category })
     }).collect();
 
+    Ok(sort_multi_sub_first(results))
+}
+
+fn is_multi_sub(title: &str) -> bool {
+    let t = title.to_lowercase();
+    t.contains("[subsplease]") ||
+    t.contains("[erai-raws]") ||
+    t.contains("multi sub") ||
+    t.contains("multisub") ||
+    t.contains("multi-sub") ||
+    t.contains("[multi]") ||
+    t.contains("multiple sub")
+}
+
+fn sort_multi_sub_first(mut v: Vec<NyaaResult>) -> Vec<NyaaResult> {
+    v.sort_by(|a, b| {
+        let am = is_multi_sub(&a.title);
+        let bm = is_multi_sub(&b.title);
+        if am != bm { return bm.cmp(&am); }
+        b.seeders.cmp(&a.seeders)
+    });
+    v
+}
+
+/// Busca directamente en Nyaa.si (RSS) — resultados con multi-sub primero
+#[tauri::command]
+pub fn nyaa_direct(query: String) -> Result<Vec<NyaaResult>, String> {
+    let encoded = urlencoding::encode(&query).into_owned();
+    let url = format!("https://nyaa.si/?page=rss&q={}&c=1_2&f=0", encoded);
+
+    let client = super::shared_client();
+    let text = client
+        .get(&url)
+        .header("User-Agent", "Mozilla/5.0 (compatible; RSS reader)")
+        .send()
+        .map_err(|e| format!("Red Nyaa: {}", e))?
+        .text()
+        .map_err(|e| e.to_string())?;
+
+    let mut results = parse_rss(&text, "https://nyaa.si")?;
+    results = sort_multi_sub_first(results);
     Ok(results)
 }
 
