@@ -294,13 +294,17 @@ async fn ensure_transmux_server() -> Result<u16, String> {
         let start_str = format!("{:.3}", start);
         let mut args: Vec<&str> = vec![
             "-hide_banner", "-loglevel", "info",
-            "-fflags", "+genpts+nobuffer",
+            "-fflags", "+nobuffer",
             "-analyzeduration", "10M", "-probesize", "10M",
         ];
-        // -ss antes de -i = seek rápido por keyframe (el navegador pide el rango correspondiente)
+        // -ss antes de -i = seek rápido por keyframe
         if start > 0.5 { args.extend(["-ss", &start_str]); }
         args.extend([
             "-i", &src,
+            // -copyts: preservar timestamps del archivo original. Así el browser
+            // sabe que el stream empieza en t=X (keyframe real) y videoEl.currentTime
+            // refleja el tiempo absoluto del archivo — los subs matchean sin offset.
+            "-copyts",
             "-map", "0:v:0", "-map", "0:a:0?",
             "-c:v", "copy",
             "-c:a", "aac", "-b:a", "160k", "-ac", "2",
