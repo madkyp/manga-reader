@@ -249,25 +249,26 @@
           const n = parseInt(k); return isNaN(n) ? max : Math.max(max, n);
         }, 0);
 
-        // maxAired = el episodio más alto que SABEMOS que ya se emitió.
-        // NO usamos episode_count (total planificado de la serie, puede ser
-        // muy alto para series en curso) ni kitsuDbTotal (conteo de la DB).
-        const maxAired = Math.max(maxKitsu, maxKitsuDb, maxAniList, anilistMaxAired);
-        console.log('[eps] maxKitsu', maxKitsu, 'maxKitsuDb', maxKitsuDb, 'maxAniList', maxAniList, 'anilistMaxAired', anilistMaxAired, '→ maxAired', maxAired);
+        // AniList puede numerar diferente a Kitsu para series largas
+        // (One Piece: AniList devuelve 1382 cuando la numeración estándar es 1158).
+        // Solo aceptamos anilistMaxAired si es razonable vs lo que Kitsu tiene.
+        const anilistCapped = anilistMaxAired <= maxKitsuDb + 300 ? anilistMaxAired : 0;
+        const maxAniListCapped = maxAniList <= maxKitsuDb + 300 ? maxAniList : 0;
+
+        // maxAired = episodio más alto confirmado como emitido
+        const maxAired = Math.max(maxKitsu, maxKitsuDb, maxAniListCapped, anilistCapped);
         const cap = maxAired > 0 ? maxAired + 5 : Infinity;
 
-        // Kitsu puede tener la base desactualizada para series muy largas.
-        // Si AniList/episode_count conoce episodios que Kitsu no tiene,
-        // generamos entradas sintéticas para que aparezcan en la lista.
+        // Sintetizar eps que Kitsu no tiene pero cuyo número <= maxAired.
+        // Partimos de maxKitsuDb (no de maxKitsu) para evitar duplicar
+        // los eps que Kitsu tiene pero sin fecha de emisión.
         const knownNumbers = new Set(rawEps.map(ep => ep.number));
         const synthEps = [];
-        if (maxAired > 0 && maxAired > maxKitsu) {
-          for (let n = maxKitsu + 1; n <= maxAired; n++) {
-            const dateKey = String(n);
-            const airdate = allDates[dateKey] ?? null;
-            // Sintetizar siempre que el techo venga de AniList (max_aired)
-            // o que Kitsu confirme ese número con episode_count
-            synthEps.push({ id: `synth-${n}`, number: n, title: null, airdate, thumbnail: null });
+        if (maxAired > maxKitsuDb) {
+          for (let n = maxKitsuDb + 1; n <= maxAired; n++) {
+            if (!knownNumbers.has(n)) {
+              synthEps.push({ id: `synth-${n}`, number: n, title: null, airdate: allDates[String(n)] ?? null, thumbnail: null });
+            }
           }
         }
 
