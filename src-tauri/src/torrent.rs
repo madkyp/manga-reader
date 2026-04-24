@@ -336,31 +336,46 @@ async fn ensure_transmux_server() -> Result<u16, String> {
         ).into_response())
     }
 
-    async fn h_sub(Path((id, idx)): Path<(String, u32)>) -> Result<Response, StatusCode> {
+    async fn h_sub(
+        Path((id, idx)): Path<(String, u32)>,
+        Query(params): Query<std::collections::HashMap<String, String>>,
+    ) -> Result<Response, StatusCode> {
         let sources = transmux_sources();
         let map = sources.lock().await;
         let src = map.get(&id).cloned().ok_or(StatusCode::NOT_FOUND)?;
         drop(map);
-        // Preferir ruta en disco: evita competencia con el stream HTTP del video
         let input = src.path
             .as_ref()
             .filter(|p| p.exists())
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or(src.url.clone());
 
+        // Determinar formato de salida según el codec (query param `fmt`)
+        // Extraemos en formato NATIVO con -c:s copy para evitar problemas
+        // del muxer WebVTT de ffmpeg con ASS complejo (fansub styles).
+        let fmt = params.get("fmt").map(|s| s.as_str()).unwrap_or("");
+        let (out_fmt, content_type) = match fmt {
+            "ass" | "ssa"       => ("ass",    "text/plain; charset=utf-8"),
+            "subrip" | "srt"    => ("srt",    "text/plain; charset=utf-8"),
+            _                   => ("webvtt", "text/vtt; charset=utf-8"),
+        };
+
         let is_http = input.starts_with("http");
+
+        // Intento 1: copia nativa (-c:s copy) — rápido y sin conversión
         let mut args: Vec<String> = vec!["-loglevel".into(), "error".into()];
         if is_http {
             args.extend([
                 "-fflags".into(), "+ignidx+nobuffer".into(),
-                "-analyzeduration".into(), "60M".into(),
-                "-probesize".into(), "50M".into(),
+                "-analyzeduration".into(), "100M".into(),
+                "-probesize".into(), "100M".into(),
             ]);
         }
         args.extend([
-            "-i".into(), input,
+            "-i".into(), input.clone(),
             "-map".into(), format!("0:s:{}", idx),
-            "-f".into(), "webvtt".into(),
+            "-c:s".into(), "copy".into(),
+            "-f".into(), out_fmt.into(),
             "pipe:1".into(),
         ]);
 
@@ -374,18 +389,50 @@ async fn ensure_transmux_server() -> Result<u16, String> {
         .map_err(|_| StatusCode::GATEWAY_TIMEOUT)?
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        if out.stdout.is_empty() {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            eprintln!("[h_sub] ffmpeg stderr (idx={}): {}", idx, stderr);
-            return Err(StatusCode::NO_CONTENT);
-        }
+        let stdout = if !out.stdout.is_empty() {
+            out.stdout
+        } else {
+            // Intento 2 (fallback): convertir siempre a WebVTT con re-encoding
+            let stderr1 = String::from_utf8_lossy(&out.stderr);
+            eprintln!("[h_sub] copia nativa falló (idx={} fmt={}): {}", idx, out_fmt, stderr1);
+            let mut a2: Vec<String> = vec!["-loglevel".into(), "error".into()];
+            if is_http {
+                a2.extend([
+                    "-fflags".into(), "+ignidx+nobuffer".into(),
+                    "-analyzeduration".into(), "100M".into(),
+                    "-probesize".into(), "100M".into(),
+                ]);
+            }
+            a2.extend([
+                "-i".into(), input,
+                "-map".into(), format!("0:s:{}", idx),
+                "-f".into(), "webvtt".into(),
+                "pipe:1".into(),
+            ]);
+            let out2 = tokio::time::timeout(
+                std::time::Duration::from_secs(60),
+                cmd_async(ff_bin("ffmpeg")).args(&a2).output(),
+            )
+            .await
+            .map_err(|_| StatusCode::GATEWAY_TIMEOUT)?
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            if out2.stdout.is_empty() {
+                let stderr2 = String::from_utf8_lossy(&out2.stderr);
+                eprintln!("[h_sub] fallback WebVTT también falló (idx={}): {}", idx, stderr2);
+                return Err(StatusCode::NO_CONTENT);
+            }
+            out2.stdout
+        };
+
+        // Si el fallback se activó, siempre devolvemos WebVTT
+        let final_ct = if stdout.starts_with(b"WEBVTT") { "text/vtt; charset=utf-8" } else { content_type };
 
         Ok((
             [
-                ("Content-Type", "text/vtt; charset=utf-8"),
+                ("Content-Type", final_ct),
                 ("Access-Control-Allow-Origin", "*"),
             ],
-            out.stdout,
+            stdout,
         ).into_response())
     }
 
@@ -533,7 +580,7 @@ async fn probe_subtitles(source_url: &str, session_id: &str, port: u16) -> Resul
             index: i as u32,
             lang,
             title,
-            url:   format!("http://127.0.0.1:{}/transmux/{}/sub/{}", port, session_id, i),
+            url:   format!("http://127.0.0.1:{}/transmux/{}/sub/{}?fmt={}", port, session_id, i, codec),
             codec: codec.clone(),
         });
     }
