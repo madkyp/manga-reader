@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { animeLibrary, toggleAnimeLibrary, pendingAnime } from '../stores/anime.js';
   import TorrentModal from './TorrentModal.svelte';
+  import MpvPlayer from './MpvPlayer.svelte';
 
   async function tauri(cmd, args) {
     const { invoke } = await import('@tauri-apps/api/core');
@@ -374,65 +375,15 @@
       }
 
       const ext = (fileEntry.name.split('.').pop() || '').toLowerCase();
-      const needsTransmux = ['mkv', 'avi', 'mov'].includes(ext);
-
-      // Subs externos (.srt/.ass/.vtt sueltos en el torrent)
-      const subExts = ['srt', 'vtt', 'ass', 'ssa'];
-      const subFiles = (result.files ?? []).filter(f => {
-        const e = (f.name.split('.').pop() || '').toLowerCase();
-        return subExts.includes(e);
-      }).map(f => ({
-        url: f.stream_url,
-        name: f.name,
-        lang: detectSubLang(f.name),
-        embedded: false,
-      }));
-
-      // Si es MKV/AVI/MOV → usar transmux (ffmpeg) + extraer subs embebidos
-      let playUrl = fileUrl;
-      let allSubs = subFiles;
-      if (needsTransmux) {
-        try {
-          const t = await tauri('torrent_transmux', {
-            torrentId: result.torrent_id,
-            fileIdx: fileEntry.index,
-          });
-          playUrl = t.video_url;
-          if (t.duration_secs > 0) videoDuration = t.duration_secs;
-          const embedded = (t.subs ?? []).map(s => ({
-            url:    s.url,
-            name:   s.title || s.lang || `Sub ${s.index + 1}`,
-            lang:   (s.lang || '').toUpperCase(),
-            codec:  s.codec || '',
-            embedded: true,
-          }));
-          allSubs = [...embedded, ...subFiles];
-        } catch(e) {
-          torrentPlayer = { ...torrentPlayer, loading: false, videoError: `ffmpeg falló (¿instalado?): ${e}` };
-          return;
-        }
-      }
-
-      // Calcular aviso de bitmap ANTES de sobrescribir torrentPlayer
-      let initialVideoError = '';
-      if (needsTransmux && allSubs.length === 0 && subFiles.length === 0) {
-        // No hay subs de texto — se mostrará el botón "Sub" para re-detectar
-      }
 
       torrentPlayer = {
-        torrentId:      result.torrent_id,
-        fileUrl:        playUrl,
-        fileName:       fileEntry?.name || result.name,
-        status:         null,
-        subs:           allSubs,
-        activeSub:      null,
-        videoError:     initialVideoError,
-        needsExternal:  false,
-        loading:        false,
-        _fileIdx:       fileEntry?.index ?? 0,
-        _subFiles:      subFiles,
-        _needsTransmux: needsTransmux,
-        _transmuxBase:  needsTransmux ? playUrl : null,
+        torrentId:   result.torrent_id,
+        fileUrl:     fileUrl,   // URL cruda de rqbit → mpv la consume directamente
+        fileName:    fileEntry?.name || result.name,
+        status:      null,
+        videoError:  '',
+        loading:     false,
+        _fileIdx:    fileEntry?.index ?? 0,
       };
 
       // Arrancar polling de progreso
@@ -1084,133 +1035,11 @@
       </div>
 
       {#if torrentPlayer.fileUrl}
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="video-container" onmousemove={revealControls} onmouseleave={() => showSubMenu = false}>
-          <!-- svelte-ignore a11y_media_has_caption -->
-          <video
-            class="torrent-video"
-            src={torrentPlayer.fileUrl}
-            autoplay playsinline
-            onerror={onVideoError}
-            ontimeupdate={onTimeUpdate}
-            ondurationchange={onDurationChange}
-            onprogress={onProgress}
-            onplay={onVideoPlay}
-            onpause={onVideoPause}
-            oncanplay={onCanPlay}
-            bind:this={videoEl}
-          ></video>
-
-          {#if seekLoading}
-            <div class="seek-loading">
-              <div class="spinner large"></div>
-            </div>
-          {/if}
-
-          {#if currentSubLine}
-            <div class="sub-overlay">{currentSubLine}</div>
-          {:else if subLoadError && activeSub}
-            <div class="sub-overlay sub-error">{subLoadError}</div>
-          {/if}
-
-          <!-- Controles personalizados -->
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <div class="vid-controls" class:hidden={!showControls}>
-            <!-- Barra de progreso -->
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <div class="seek-track" onclick={seekTo}>
-              <div class="seek-buf"  style="width:{videoDuration > 0 ? (bufferedEnd / videoDuration * 100) : 0}%"></div>
-              <div class="seek-fill" style="width:{videoDuration > 0 ? (videoCurrent / videoDuration * 100) : 0}%">
-                <div class="seek-thumb"></div>
-              </div>
-            </div>
-
-            <div class="ctrl-row">
-              <!-- Play / Pause -->
-              <button class="ctrl-btn" onclick={togglePlay} title={videoPaused ? 'Reproducir' : 'Pausar'}>
-                {#if videoPaused}
-                  <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                {:else}
-                  <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-                {/if}
-              </button>
-
-              <!-- Tiempo -->
-              <span class="ctrl-time">{fmtTime(videoCurrent)} / {fmtTime(videoDuration)}</span>
-
-              <div class="ctrl-spacer"></div>
-
-              <!-- Ajuste de sincronía de subs (solo cuando hay pista activa) -->
-              {#if torrentPlayer._needsTransmux && torrentPlayer.activeSub}
-                <div class="sub-sync">
-                  <button class="sync-btn" onclick={(e) => { e.stopPropagation(); bumpSubOffset(-0.5); }} title="Subs 0.5s antes">−0.5</button>
-                  <button class="sync-btn sync-mini" onclick={(e) => { e.stopPropagation(); bumpSubOffset(-0.1); }} title="Subs 0.1s antes">−0.1</button>
-                  <button
-                    class="sync-val"
-                    onclick={(e) => { e.stopPropagation(); subOffset = 0; }}
-                    title="Reset desfase"
-                  >{subOffset > 0 ? '+' : ''}{subOffset.toFixed(1)}s</button>
-                  <button class="sync-btn sync-mini" onclick={(e) => { e.stopPropagation(); bumpSubOffset(0.1); }} title="Subs 0.1s después">+0.1</button>
-                  <button class="sync-btn" onclick={(e) => { e.stopPropagation(); bumpSubOffset(0.5); }} title="Subs 0.5s después">+0.5</button>
-                </div>
-              {/if}
-
-              <!-- Subtítulos -->
-              <div class="cc-wrap">
-                {#if torrentPlayer._needsTransmux}
-                  <button
-                    class="cc-btn"
-                    class:cc-active={!!torrentPlayer.activeSub}
-                    onclick={(e) => { e.stopPropagation(); showSubMenu = !showSubMenu; }}
-                    title="Subtítulos"
-                  >
-                    {#if probingSubs}
-                      <span class="cc-spinner"></span>
-                    {:else}
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <rect x="2" y="6" width="20" height="12" rx="2"/>
-                        <path d="M7 12h4M15 12h2M7 16h2M13 16h4"/>
-                      </svg>
-                    {/if}
-                    CC
-                  </button>
-                  {#if showSubMenu}
-                    <!-- svelte-ignore a11y_click_events_have_key_events -->
-                    <div class="cc-menu">
-                      <button
-                        class="cc-item"
-                        class:cc-item-active={!torrentPlayer.activeSub}
-                        onclick={() => { selectSub(null); showSubMenu = false; }}
-                      >
-                        <span class="cc-dot"></span>Off
-                      </button>
-                      {#each torrentPlayer.subs as s}
-                        <button
-                          class="cc-item"
-                          class:cc-item-active={torrentPlayer.activeSub?.url === s.url}
-                          onclick={() => { selectSub(s); showSubMenu = false; }}
-                        >
-                          <span class="cc-dot"></span>
-                          {#if s.lang}<span class="cc-lang">{s.lang}</span>{/if}
-                          {s.title || s.name || `Pista ${s.index + 1}`}
-                        </button>
-                      {/each}
-                      <button
-                        class="cc-item cc-rescan"
-                        onclick={() => { showSubMenu = false; probeSubs(); }}
-                        disabled={probingSubs}
-                      >
-                        <span class="cc-dot"></span>
-                        {probingSubs ? 'Buscando…' : '↺ Re-detectar pistas'}
-                      </button>
-                    </div>
-                  {/if}
-                {/if}
-              </div>
-            </div>
-          </div>
-        </div>
-
+        <MpvPlayer
+          url={torrentPlayer.fileUrl}
+          fileName={torrentPlayer.fileName}
+          onclose={closeTorrentPlayer}
+        />
         {#if torrentPlayer.videoError}
           <div class="video-err">{torrentPlayer.videoError}</div>
         {/if}
