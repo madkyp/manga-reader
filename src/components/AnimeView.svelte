@@ -215,8 +215,20 @@
         : { ...item };
 
       // AniList dates (más completas que Kitsu para episodios recientes)
-      const allDates = datesJson.status === 'fulfilled' ? JSON.parse(datesJson.value) : {};
-      if (datesJson.status === 'fulfilled') epDates = allDates;
+      // Formato nuevo: { dates: {ep: fecha}, max_aired: N }
+      let allDates = {};
+      let anilistMaxAired = 0;
+      if (datesJson.status === 'fulfilled') {
+        const parsed = JSON.parse(datesJson.value);
+        // Soporte formato viejo (objeto plano) y nuevo ({ dates, max_aired })
+        if (parsed.dates) {
+          allDates = parsed.dates;
+          anilistMaxAired = parsed.max_aired ?? 0;
+        } else {
+          allDates = parsed;
+        }
+        epDates = allDates;
+      }
 
       let episodes = [];
       if (epsJson.status === 'fulfilled') {
@@ -235,9 +247,26 @@
         }, 0);
 
         const maxEpCount = base.episode_count ?? 0;
-        const maxAired = Math.max(maxKitsu, maxAniList, maxEpCount);
+        const maxAired = Math.max(maxKitsu, maxAniList, anilistMaxAired, maxEpCount);
         const cap = maxAired > 0 ? maxAired + 20 : Infinity;
-        episodes = rawEps
+
+        // Kitsu puede tener la base desactualizada para series muy largas.
+        // Si AniList/episode_count conoce episodios que Kitsu no tiene,
+        // generamos entradas sintéticas para que aparezcan en la lista.
+        const knownNumbers = new Set(rawEps.map(ep => ep.number));
+        const synthEps = [];
+        if (maxAired > 0 && maxAired > maxKitsu) {
+          for (let n = maxKitsu + 1; n <= maxAired; n++) {
+            const dateKey = String(n);
+            const airdate = allDates[dateKey] ?? null;
+            // Solo incluir si ya tiene fecha de emisión o es un ep conocido por conteo
+            if (airdate || maxEpCount >= n) {
+              synthEps.push({ id: `synth-${n}`, number: n, title: null, airdate, thumbnail: null });
+            }
+          }
+        }
+
+        episodes = [...rawEps, ...synthEps]
           .filter(ep => ep.number <= cap)
           .sort((a, b) => b.number - a.number);
         kitsuEpsMore = false;
