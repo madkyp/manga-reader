@@ -331,6 +331,8 @@
       loading: true,
     };
     transmuxOffset = 0;
+    streamBaseline = 0;
+    needsBaseline  = true;
     videoCurrent = 0;
 
     let result = null;
@@ -456,6 +458,8 @@
     torrentPlayer = null;
     activeSub = null;
     transmuxOffset = 0;
+    streamBaseline = 0;
+    needsBaseline  = false;
     videoCurrent = 0;
   }
 
@@ -521,6 +525,10 @@
   // Tras cada seek, ffmpeg arranca en el keyframe más cercano (no en el tiempo pedido);
   // este offset es el tiempo real del keyframe, que obtenemos con transmux_nearest_keyframe.
   let transmuxOffset  = $state(0);
+  // Baseline de currentTime del stream tras cada seek. Normalmente WebKit arranca
+  // en 0 para fragmented MP4, pero puede tener un sesgo — lo capturamos y restamos.
+  let streamBaseline  = 0;
+  let needsBaseline   = false;
 
   function revealControls() {
     showControls = true;
@@ -557,12 +565,16 @@
         actualStart = targetTime;
       }
       transmuxOffset = actualStart;
-      const newSrc = `${torrentPlayer._transmuxBase}?start=${actualStart.toFixed(3)}`;
+      streamBaseline = 0;
+      needsBaseline  = true;
+      const newSrc = `${torrentPlayer._transmuxBase}?start=${actualStart.toFixed(6)}`;
       videoEl.src = newSrc;
       videoEl.load();
       videoEl.play().catch(() => {});
     } else {
       transmuxOffset = 0;
+      streamBaseline = 0;
+      needsBaseline  = false;
       videoEl.currentTime = targetTime;
     }
   }
@@ -655,7 +667,14 @@
   function onTimeUpdate(e) {
     // realT = tiempo absoluto del archivo. El stream de ffmpeg empieza en 0 tras
     // cada seek; transmuxOffset es el tiempo real del keyframe donde arrancó.
-    const streamT = e.currentTarget.currentTime;
+    const ct = e.currentTarget.currentTime;
+    if (needsBaseline) {
+      // Fragmented MP4 normalmente arranca en 0 pero si WebKit reporta otro valor
+      // inicial (ej. tfdt residual), lo capturamos para alinear sub/imagen.
+      streamBaseline = ct;
+      needsBaseline  = false;
+    }
+    const streamT = ct - streamBaseline;
     const realT = transmuxOffset + streamT;
     videoCurrent = realT;
     const cue = subCues.find(c => realT >= c.start && realT <= c.end);

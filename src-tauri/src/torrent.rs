@@ -291,7 +291,7 @@ async fn ensure_transmux_server() -> Result<u16, String> {
         let start: f64 = params.get("start").and_then(|s| s.parse().ok()).unwrap_or(0.0);
         let src = transmux_sources().lock().await.get(&id).map(|s| s.url.clone()).ok_or(StatusCode::NOT_FOUND)?;
 
-        let start_str = format!("{:.3}", start);
+        let start_str = format!("{:.6}", start);
         let mut args: Vec<&str> = vec![
             "-hide_banner", "-loglevel", "info",
             "-fflags", "+genpts+nobuffer",
@@ -610,9 +610,9 @@ pub async fn torrent_probe_subs(torrent_id: usize, file_idx: usize) -> Result<(V
     probe_subtitles(&probe_input, &session_id, transmux_port).await
 }
 
-/// Busca el keyframe más cercano <= target con ffprobe, para calcular el
-/// offset real del seek (ffmpeg -ss solo puede empezar en keyframes).
-/// Devuelve el tiempo real en segundos del keyframe donde arrancará el stream.
+/// Simula el seek que hará ffmpeg (-ss X -i file) con ffprobe usando los
+/// mismos flags. Devuelve el tiempo REAL (PTS) del primer frame que ffmpeg
+/// emitirá tras el seek. Así transmuxOffset queda 100% alineado.
 #[tauri::command]
 pub async fn transmux_nearest_keyframe(torrent_id: usize, file_idx: usize, target: f64) -> Result<f64, String> {
     let session_id = format!("{}-{}", torrent_id, file_idx);
@@ -628,20 +628,20 @@ pub async fn transmux_nearest_keyframe(torrent_id: usize, file_idx: usize, targe
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or(src.url);
 
-    // Buscar keyframes en una ventana de 30s antes del target.
-    // Los GOPs de anime suelen ser de 10s máx, 30s da margen suficiente.
-    let window_start = (target - 30.0).max(0.0);
-    let interval = format!("{}%{}", window_start, target + 0.5);
+    // Simular el seek de ffmpeg: -ss X antes de -i (input seek), luego pedirle
+    // los primeros packets de video. El primer PTS es donde ffmpeg empezará
+    // realmente el stream (puede ser antes del target si el cluster MKV empieza ahí).
+    let ss = format!("{:.6}", target);
 
     let out = tokio::time::timeout(
         std::time::Duration::from_secs(15),
         cmd_async(ff_bin("ffprobe"))
             .args([
                 "-v", "error",
+                "-ss", &ss,
                 "-select_streams", "v:0",
-                "-skip_frame", "nokey",
-                "-show_entries", "frame=pts_time",
-                "-read_intervals", &interval,
+                "-show_entries", "packet=pts_time,flags",
+                "-read_intervals", "%+5",
                 "-of", "csv=p=0",
                 &input,
             ])
@@ -652,16 +652,26 @@ pub async fn transmux_nearest_keyframe(torrent_id: usize, file_idx: usize, targe
     .map_err(|e| format!("ffprobe: {}", e))?;
 
     let text = String::from_utf8_lossy(&out.stdout);
-    let mut best = 0.0_f64;
+    // Cada línea: "pts_time,flags"   flags incluye "K" si es keyframe
+    let mut first_pts: Option<f64> = None;
+    let mut first_keyframe_pts: Option<f64> = None;
     for line in text.lines() {
-        let trimmed = line.trim().trim_end_matches(',');
-        if let Ok(t) = trimmed.parse::<f64>() {
-            if t <= target && t > best {
-                best = t;
-            }
+        let line = line.trim().trim_end_matches(',');
+        if line.is_empty() { continue; }
+        let parts: Vec<&str> = line.split(',').collect();
+        if parts.is_empty() { continue; }
+        let pts: f64 = match parts[0].parse() { Ok(v) => v, Err(_) => continue };
+        if first_pts.is_none() { first_pts = Some(pts); }
+        let is_key = parts.get(1).map(|f| f.contains('K')).unwrap_or(false);
+        if is_key && first_keyframe_pts.is_none() {
+            first_keyframe_pts = Some(pts);
+            break;
         }
     }
-    Ok(best)
+
+    // El primer keyframe es donde ffmpeg -c:v copy empezará a emitir video.
+    // Si no encontramos keyframe (raro), usar el primer PTS visto.
+    Ok(first_keyframe_pts.or(first_pts).unwrap_or(target))
 }
 
 /// Abre una URL en un reproductor externo — mpv en Linux, VLC en Windows.
