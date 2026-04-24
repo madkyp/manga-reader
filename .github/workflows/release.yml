@@ -68,35 +68,30 @@ jobs:
           retention-days: 30
 
   build-linux:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-
       - name: Install system dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm --needed \
+            git base-devel curl wget file pkg-config \
+            nodejs npm \
+            webkit2gtk-4.1 \
+            gtk3 \
+            libayatana-appindicator \
+            librsvg \
             patchelf \
-            libfuse2 \
-            file
+            fuse2 \
+            openssl
+
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
       - name: Download ffmpeg static
         run: |
@@ -111,7 +106,9 @@ jobs:
         run: npm ci
 
       - name: Build AppImage
-        run: npm run tauri build -- --bundles appimage
+        run: |
+          source $HOME/.cargo/env
+          npm run tauri build -- --bundles appimage
         env:
           TAURI_SIGNING_PRIVATE_KEY: ""
 
@@ -119,28 +116,21 @@ jobs:
         run: |
           APPIMAGE=$(find src-tauri/target/release/bundle/appimage -name "*.AppImage" | head -1)
           echo "Patching $APPIMAGE"
-
-          # Extraer AppImage (comillas para manejar espacios en el nombre)
           "$APPIMAGE" --appimage-extract
 
-          # Copiar ffmpeg al AppDir
           cp src-tauri/binaries/ffmpeg  squashfs-root/usr/bin/ffmpeg
           cp src-tauri/binaries/ffprobe squashfs-root/usr/bin/ffprobe
           chmod +x squashfs-root/usr/bin/ffmpeg squashfs-root/usr/bin/ffprobe
 
-          # El AppRun de Tauri es un BINARIO compilado, no un script.
-          # Parchear con sed lo corrompía. Solución: renombrarlo a AppRun.real
-          # y crear un wrapper shell que setea las variables y lo llama intacto.
           echo "--- Tipo de AppRun original ---"
           file squashfs-root/AppRun
           mv squashfs-root/AppRun squashfs-root/AppRun.real
           chmod +x squashfs-root/AppRun.real
-          printf '#!/bin/bash\n# Forzar XWayland — la libEGL de Ubuntu 22.04 no es compatible con Wayland nativo moderno\nunset WAYLAND_DISPLAY\nexport GDK_BACKEND=x11\nexport WEBKIT_DISABLE_DMABUF_RENDERER=1\nexport LIBGL_ALWAYS_SOFTWARE=1\nexport MESA_LOADER_DRIVER_OVERRIDE=swrast\nAPPDIR="${APPDIR:-$(dirname "$(readlink -f "$0")")}"\nexport PATH="$APPDIR/usr/bin:$PATH"\nexec "$APPDIR/AppRun.real" "$@"\n' > squashfs-root/AppRun
+          printf '#!/bin/bash\nunset WAYLAND_DISPLAY\nexport GDK_BACKEND=x11\nexport WEBKIT_DISABLE_DMABUF_RENDERER=1\nAPPDIR="${APPDIR:-$(dirname "$(readlink -f "$0")")}"\nexport PATH="$APPDIR/usr/bin:$PATH"\nexec "$APPDIR/AppRun.real" "$@"\n' > squashfs-root/AppRun
           chmod +x squashfs-root/AppRun
           echo "--- AppRun wrapper ---"
           cat squashfs-root/AppRun
 
-          # Reempaquetar con appimagetool
           wget -q "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" -O appimagetool
           chmod +x appimagetool
           ARCH=x86_64 ./appimagetool --appimage-extract-and-run squashfs-root TheFoundry_App-x86_64.AppImage
