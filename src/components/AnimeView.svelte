@@ -403,14 +403,16 @@
             embedded: true,
           }));
           allSubs = [...embedded, ...subFiles];
-          // Aviso si solo hay subs bitmap (PGS/DVDSUB — no soportados)
-          if (embedded.length === 0 && subFiles.length === 0 && (t.bitmap_subs ?? 0) > 0) {
-            torrentPlayer = { ...torrentPlayer, videoError: `Este archivo solo tiene subtítulos de imagen (PGS/DVDSUB) — no se pueden mostrar. Usa un reproductor externo.` };
-          }
         } catch(e) {
           torrentPlayer = { ...torrentPlayer, loading: false, videoError: `ffmpeg falló (¿instalado?): ${e}` };
           return;
         }
+      }
+
+      // Calcular aviso de bitmap ANTES de sobrescribir torrentPlayer
+      let initialVideoError = '';
+      if (needsTransmux && allSubs.length === 0 && subFiles.length === 0) {
+        // No hay subs de texto — se mostrará el botón "Sub" para re-detectar
       }
 
       torrentPlayer = {
@@ -420,13 +422,13 @@
         status:         null,
         subs:           allSubs,
         activeSub:      null,
-        videoError:     '',
+        videoError:     initialVideoError,
         needsExternal:  false,
         loading:        false,
         _fileIdx:       fileEntry?.index ?? 0,
         _subFiles:      subFiles,
         _needsTransmux: needsTransmux,
-        _transmuxBase:  needsTransmux ? playUrl : null,  // URL sin ?start= para seek
+        _transmuxBase:  needsTransmux ? playUrl : null,
       };
 
       // Arrancar polling de progreso
@@ -484,11 +486,11 @@
         embedded: true,
       }));
       const allSubs = [...subs, ...(torrentPlayer._subFiles ?? [])];
-      let videoError = torrentPlayer.videoError || '';
+      let videoError = '';
       if (allSubs.length === 0 && bitmapCount > 0) {
-        videoError = `Solo subtítulos de imagen (PGS/DVDSUB, ${bitmapCount} pista${bitmapCount > 1 ? 's' : ''}) — no soportados en el player interno. Prueba con reproductor externo.`;
+        videoError = `Subtítulos de imagen (PGS/DVDSUB × ${bitmapCount}) — no renderizables. Usa reproductor externo.`;
       } else if (allSubs.length === 0) {
-        videoError = 'No se detectaron pistas de subtítulos en este archivo.';
+        videoError = 'ffprobe no detectó pistas de subtítulos de texto. Si el archivo aún está descargando, prueba más tarde.';
       }
       torrentPlayer = { ...torrentPlayer, subs: allSubs, videoError };
     } catch(e) {
@@ -1090,17 +1092,21 @@
 
               <!-- Subtítulos -->
               <div class="cc-wrap">
-                {#if torrentPlayer.subs?.length > 0}
+                {#if torrentPlayer._needsTransmux}
                   <button
                     class="cc-btn"
                     class:cc-active={!!torrentPlayer.activeSub}
                     onclick={(e) => { e.stopPropagation(); showSubMenu = !showSubMenu; }}
                     title="Subtítulos"
                   >
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <rect x="2" y="6" width="20" height="12" rx="2"/>
-                      <path d="M7 12h4M15 12h2M7 16h2M13 16h4"/>
-                    </svg>
+                    {#if probingSubs}
+                      <span class="cc-spinner"></span>
+                    {:else}
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="2" y="6" width="20" height="12" rx="2"/>
+                        <path d="M7 12h4M15 12h2M7 16h2M13 16h4"/>
+                      </svg>
+                    {/if}
                     CC
                   </button>
                   {#if showSubMenu}
@@ -1124,25 +1130,16 @@
                           {s.title || s.name || `Pista ${s.index + 1}`}
                         </button>
                       {/each}
+                      <button
+                        class="cc-item cc-rescan"
+                        onclick={() => { showSubMenu = false; probeSubs(); }}
+                        disabled={probingSubs}
+                      >
+                        <span class="cc-dot"></span>
+                        {probingSubs ? 'Buscando…' : '↺ Re-detectar pistas'}
+                      </button>
                     </div>
                   {/if}
-                {:else if torrentPlayer._needsTransmux}
-                  <button
-                    class="cc-btn cc-detect"
-                    onclick={probeSubs}
-                    disabled={probingSubs}
-                    title="Buscar pistas de subtítulos embebidas"
-                  >
-                    {#if probingSubs}
-                      <span class="cc-spinner"></span>
-                    {:else}
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <rect x="2" y="6" width="20" height="12" rx="2"/>
-                        <path d="M7 12h4M15 12h2M7 16h2M13 16h4"/>
-                      </svg>
-                    {/if}
-                    {probingSubs ? '…' : 'Sub'}
-                  </button>
                 {/if}
               </div>
             </div>
@@ -2030,6 +2027,8 @@
   .cc-item:hover { background: rgba(255,255,255,0.07); color: #fff; }
   .cc-item.cc-item-active { color: var(--primary, #f59e0b); font-weight: 700; }
   .cc-item.cc-item-active .cc-dot { background: var(--primary, #f59e0b); }
+  .cc-item.cc-rescan { color: var(--text-muted); font-size: 10px; border-top: 1px solid var(--outline-dim); margin-top: 2px; }
+  .cc-item.cc-rescan:hover { color: var(--text); }
 
   .cc-dot {
     width: 6px; height: 6px; border-radius: 50%;

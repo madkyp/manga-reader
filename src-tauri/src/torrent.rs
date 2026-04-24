@@ -486,12 +486,19 @@ async fn probe_duration(source: &str) -> f64 {
 
 async fn probe_subtitles(source_url: &str, session_id: &str, port: u16) -> Result<(Vec<SubtitleTrack>, u32), String> {
     let source = source_url.to_string();
-    // Para streams HTTP (descarga parcial) necesitamos ignorar el índice MKV y
-    // analizar más datos para que ffprobe detecte las pistas de subtítulos.
     let is_http = source.starts_with("http");
-    let mut args: Vec<&str> = vec!["-v", "quiet", "-print_format", "json"];
+
+    // Siempre usar probesize grande: MKVs con muchas pistas o fuentes adjuntas
+    // pueden tener headers >5 MB (el límite por defecto de ffprobe).
+    let mut args: Vec<&str> = vec![
+        "-v", "quiet",
+        "-print_format", "json",
+        "-probesize", "100M",
+        "-analyzeduration", "100M",
+    ];
     if is_http {
-        args.extend(&["-fflags", "+ignidx+nobuffer", "-analyzeduration", "60M", "-probesize", "50M"]);
+        // Para HTTP: ignorar el índice MKV y leer linealmente desde el inicio
+        args.extend(&["-fflags", "+ignidx+nobuffer"]);
     }
     args.extend(&["-show_streams", "-select_streams", "s", &source]);
 
@@ -502,14 +509,16 @@ async fn probe_subtitles(source_url: &str, session_id: &str, port: u16) -> Resul
             .output(),
     )
     .await
-    .map_err(|_| "ffprobe timeout")?
+    .map_err(|_| "ffprobe timeout tras 60s".to_string())?
     .map_err(|e| format!("ffprobe: {}", e))?;
 
     if !out.status.success() {
-        return Err(format!("ffprobe exit {}", out.status));
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        return Err(format!("ffprobe exit {} — {}", out.status, stderr.trim()));
     }
 
-    let json: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|e| e.to_string())?;
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .map_err(|e| format!("JSON inválido de ffprobe: {}", e))?;
     let streams = json.get("streams").and_then(|s| s.as_array()).cloned().unwrap_or_default();
 
     let mut subs = Vec::new();
