@@ -19,17 +19,24 @@ pub static RESOURCE_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::On
 
 fn ff_bin(name: &str) -> std::path::PathBuf {
     let fname = if cfg!(windows) { format!("{}.exe", name) } else { name.to_string() };
-    // 1. resource_dir resuelto por Tauri en startup (más fiable)
+    // 1. resource_dir (bundle instalado)
     if let Some(dir) = RESOURCE_DIR.get() {
         let c = dir.join(&fname);
         if c.exists() { return c; }
     }
-    // 2. Junto al exe
+    // 2. Junto al exe / resources/
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             for c in [dir.join(&fname), dir.join("resources").join(&fname)] {
                 if c.exists() { return c; }
             }
+        }
+    }
+    // 3. PATH del sistema (modo dev / instalación global)
+    if let Ok(paths) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            let c = dir.join(&fname);
+            if c.exists() { return c; }
         }
     }
     std::path::PathBuf::from(name)
@@ -376,20 +383,17 @@ pub async fn torrent_transmux(torrent_id: usize, file_idx: usize) -> Result<Tran
     // Verificar que ffmpeg + ffprobe estén disponibles
     for name in ["ffmpeg", "ffprobe"] {
         let path = ff_bin(name);
-        let exists = path.exists();
-        let ok = exists && cmd_sync(&path)
+        let ok = cmd_sync(&path)
             .arg("-version")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
-            .is_ok();
+            .map(|s| s.success())
+            .unwrap_or(false);
         if !ok {
             return Err(format!(
-                "{} no encontrado.\nBuscado en: {}\nExiste: {}\nRESOURCE_DIR: {}",
-                name,
-                path.display(),
-                exists,
-                RESOURCE_DIR.get().map(|p| p.display().to_string()).unwrap_or_else(|| "no inicializado".into())
+                "{} no encontrado. Instálalo con: sudo pacman -S ffmpeg\nBuscado en: {}",
+                name, path.display()
             ));
         }
     }
