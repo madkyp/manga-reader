@@ -132,9 +132,12 @@ pub fn nyaa_direct(query: String) -> Result<Vec<NyaaResult>, String> {
 fn parse_rss(xml: &str, base: &str) -> Result<Vec<NyaaResult>, String> {
     let domain = base.trim_end_matches('/');
     let re_item = Regex::new(r"(?s)<item>(.*?)</item>").unwrap();
-    let re_title    = Regex::new(r"<title><!\[CDATA\[(.*?)\]\]></title>").unwrap();
+    // Nyaa.si usa títulos planos; otros mirrors pueden usar CDATA
+    let re_title    = Regex::new(r"<title>(?:<!\[CDATA\[(.*?)\]\]>|([^<]*))</title>").unwrap();
     let re_link     = Regex::new(r"<guid[^>]*>(?:https?://[^/]+)?/view/(\d+)</guid>").unwrap();
+    // Nyaa.si pone el .torrent en <link>; otros mirrors usan <nyaa:torrent>
     let re_torrent  = Regex::new(r"<nyaa:torrent>(.*?)</nyaa:torrent>").unwrap();
+    let re_link_url = Regex::new(r"<link>(https://[^<]+\.torrent[^<]*)</link>").unwrap();
     let re_infohash = Regex::new(r"<nyaa:infoHash>(.*?)</nyaa:infoHash>").unwrap();
     let re_size     = Regex::new(r"<nyaa:size>(.*?)</nyaa:size>").unwrap();
     let re_seeders  = Regex::new(r"<nyaa:seeders>(\d+)</nyaa:seeders>").unwrap();
@@ -148,7 +151,9 @@ fn parse_rss(xml: &str, base: &str) -> Result<Vec<NyaaResult>, String> {
         let item = &cap[1];
 
         let title = re_title.captures(item)
-            .map(|c| c[1].to_string())
+            .and_then(|c| c.get(1).or_else(|| c.get(2)))
+            .map(|m| m.as_str().trim().to_string())
+            .filter(|s| !s.is_empty())
             .unwrap_or_default();
         if title.is_empty() { continue; }
 
@@ -156,10 +161,11 @@ fn parse_rss(xml: &str, base: &str) -> Result<Vec<NyaaResult>, String> {
             .map(|c| c[1].to_string())
             .unwrap_or_default();
 
+        // Buscar torrent URL: primero <nyaa:torrent>, luego <link> directo al .torrent
         let torrent_raw = re_torrent.captures(item)
             .map(|c| c[1].trim().to_string())
+            .or_else(|| re_link_url.captures(item).map(|c| c[1].trim().to_string()))
             .unwrap_or_default();
-        // Si el torrent URL es relativo, completarlo con el dominio del mirror
         let torrent = if torrent_raw.starts_with("http") {
             torrent_raw
         } else if !torrent_raw.is_empty() {
