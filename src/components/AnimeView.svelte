@@ -330,6 +330,8 @@
       needsExternal: false,
       loading: true,
     };
+    transmuxOffset = 0;
+    videoCurrent = 0;
 
     let result = null;
     let lastErr = '';
@@ -453,6 +455,8 @@
     clearInterval(torrentPollId);
     torrentPlayer = null;
     activeSub = null;
+    transmuxOffset = 0;
+    videoCurrent = 0;
   }
 
   function detectSubLang(name) {
@@ -506,13 +510,16 @@
   let videoEl        = $state(null);
 
   // Controles de reproducción personalizados
-  let videoPaused   = $state(true);
-  let videoDuration = $state(0);   // duración efectiva (ffprobe o videoEl.duration)
-  let videoCurrent  = $state(0);
-  let bufferedEnd   = $state(0);
-  let showControls  = $state(true);
-  let seekLoading   = $state(false);
-  let hideTimer     = null;
+  let videoPaused     = $state(true);
+  let videoDuration   = $state(0);   // duración efectiva (ffprobe o videoEl.duration)
+  let videoCurrent    = $state(0);
+  let bufferedEnd     = $state(0);
+  let showControls    = $state(true);
+  let seekLoading     = $state(false);
+  let hideTimer       = null;
+  // Offset del seek en modo transmux: el stream de ffmpeg empieza en t=0 tras cada seek,
+  // pero los timestamps de los subs son absolutos. realTime = transmuxOffset + videoEl.currentTime
+  let transmuxOffset  = $state(0);
 
   function revealControls() {
     showControls = true;
@@ -536,6 +543,7 @@
       // Transmux: reiniciar ffmpeg desde la nueva posición — el servidor descarga
       // los trozos del torrent a partir del byte correspondiente a ese segundo.
       seekLoading = true;
+      transmuxOffset = targetTime;  // todos los tiempos del stream se desplazan por esto
       videoCurrent = targetTime;
       const newSrc = `${torrentPlayer._transmuxBase}?start=${targetTime.toFixed(3)}`;
       videoEl.src = newSrc;
@@ -543,6 +551,7 @@
       videoEl.play().catch(() => {});
     } else {
       // Stream directo (MP4/WebM): el navegador hace un Range request a librqbit
+      transmuxOffset = 0;
       videoEl.currentTime = targetTime;
     }
   }
@@ -633,9 +642,11 @@
   }
 
   function onTimeUpdate(e) {
-    const t = e.currentTarget.currentTime;
-    videoCurrent = t;
-    const cue = subCues.find(c => t >= c.start && t <= c.end);
+    const streamT = e.currentTarget.currentTime;
+    // realT = tiempo absoluto dentro del archivo original (subs y seek usan esto)
+    const realT = transmuxOffset + streamT;
+    videoCurrent = realT;
+    const cue = subCues.find(c => realT >= c.start && realT <= c.end);
     currentSubLine = cue ? cue.text : '';
   }
 
