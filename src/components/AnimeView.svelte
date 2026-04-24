@@ -512,6 +512,12 @@
   let subCues        = $state([]);
   let currentSubLine = $state('');
   let videoEl        = $state(null);
+  // Ajuste manual de sincronía subs (segundos). Positivo = subs más tarde
+  // (cuando aparecen antes de hablar). Negativo = subs antes (cuando llegan tarde).
+  let subOffset      = $state(0);
+  function bumpSubOffset(delta) {
+    subOffset = Math.round((subOffset + delta) * 100) / 100;
+  }
 
   // Controles de reproducción personalizados
   let videoPaused     = $state(true);
@@ -677,7 +683,9 @@
     const streamT = ct - streamBaseline;
     const realT = transmuxOffset + streamT;
     videoCurrent = realT;
-    const cue = subCues.find(c => realT >= c.start && realT <= c.end);
+    // subOffset positivo = subs más tarde (restamos para hacer lookup "antes")
+    const subT = realT - subOffset;
+    const cue = subCues.find(c => subT >= c.start && subT <= c.end);
     currentSubLine = cue ? cue.text : '';
   }
 
@@ -1131,6 +1139,21 @@
               <span class="ctrl-time">{fmtTime(videoCurrent)} / {fmtTime(videoDuration)}</span>
 
               <div class="ctrl-spacer"></div>
+
+              <!-- Ajuste de sincronía de subs (solo cuando hay pista activa) -->
+              {#if torrentPlayer._needsTransmux && torrentPlayer.activeSub}
+                <div class="sub-sync">
+                  <button class="sync-btn" onclick={(e) => { e.stopPropagation(); bumpSubOffset(-0.5); }} title="Subs 0.5s antes">−0.5</button>
+                  <button class="sync-btn sync-mini" onclick={(e) => { e.stopPropagation(); bumpSubOffset(-0.1); }} title="Subs 0.1s antes">−0.1</button>
+                  <button
+                    class="sync-val"
+                    onclick={(e) => { e.stopPropagation(); subOffset = 0; }}
+                    title="Reset desfase"
+                  >{subOffset > 0 ? '+' : ''}{subOffset.toFixed(1)}s</button>
+                  <button class="sync-btn sync-mini" onclick={(e) => { e.stopPropagation(); bumpSubOffset(0.1); }} title="Subs 0.1s después">+0.1</button>
+                  <button class="sync-btn" onclick={(e) => { e.stopPropagation(); bumpSubOffset(0.5); }} title="Subs 0.5s después">+0.5</button>
+                </div>
+              {/if}
 
               <!-- Subtítulos -->
               <div class="cc-wrap">
@@ -2006,6 +2029,32 @@
     background: rgba(248,113,113,0.12); color: #f87171;
     font-size: 11px; padding: 8px 16px; border-top: 1px solid rgba(248,113,113,0.3);
     flex-shrink: 0;
+  }
+
+  /* ── Ajuste de sincronía de subs ── */
+  .sub-sync {
+    display: flex; align-items: center; gap: 2px;
+    margin-right: 6px; flex-shrink: 0;
+  }
+  .sync-btn, .sync-val {
+    background: rgba(0,0,0,0.65);
+    color: rgba(255,255,255,0.85);
+    border: 1px solid rgba(255,255,255,0.25);
+    border-radius: 4px;
+    font-size: 11px; font-weight: 500;
+    padding: 3px 6px; cursor: pointer;
+    font-family: inherit;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .sync-btn:hover, .sync-val:hover {
+    background: rgba(0,0,0,0.85);
+    color: #fff;
+    border-color: rgba(255,255,255,0.5);
+  }
+  .sync-btn.sync-mini { font-size: 10px; padding: 3px 4px; }
+  .sync-val {
+    min-width: 44px; text-align: center;
+    color: var(--primary, #f59e0b);
   }
 
   /* ── CC button (in-player subtitle selector) ── */
