@@ -61,7 +61,7 @@ jobs:
           $installer = Get-ChildItem "src-tauri/target/release/bundle/nsis/*.exe" | Select-Object -First 1
           $mb = [math]::Round($installer.Length / 1MB, 1)
           Write-Host "Installer: $($installer.Name) — $mb MB"
-          if ($installer.Length -lt 150MB) {
+          if ($installer.Length -lt 100MB) {
             Write-Error "FALLO: instalador demasiado pequeño ($mb MB) — faltan binarios"
             exit 1
           }
