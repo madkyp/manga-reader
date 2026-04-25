@@ -224,6 +224,7 @@ pub fn run() {
             scraper::nyaa::nyaa_search,
             scraper::nyaa::nyaa_direct,
             scraper::nyaa::nyaa_torrent_info,
+            scraper::nyaa::nyaa_episode_list,
             // Torrent streaming
             torrent::torrent_start,
             torrent::torrent_status,
@@ -248,6 +249,8 @@ pub fn run() {
             mpv::mpv_set_volume,
             mpv::mpv_close,
             mpv::mpv_raw_command,
+            mpv::mpv_get_tracks,
+            mpv::mpv_set_sub,
         ])
         .run(tauri::generate_context!())
         .expect("error al arrancar la aplicación Tauri");

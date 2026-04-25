@@ -200,107 +200,29 @@
     subView = 'detail';
     detail = { ...item, episodes: [], genres: item.genres ?? [], synopsis: item.synopsis ?? '', status: item.status ?? '' };
     epDates = {}; watchedSet = loadWatched(item.id);
-    kitsuEpsPage = 1; kitsuEpsMore = false;
+    kitsuEpsMore = false;
     loading = true; error = '';
     try {
-      const [detailJson, epsJson, datesJson] = await Promise.allSettled([
-        tauri('kitsu_detail',   { id: item.id }),
-        tauri('kitsu_episodes', { animeId: item.id }),
-        tauri('anilist_episode_dates', { title: item.title }),
+      const [detailJson, episodesResult] = await Promise.allSettled([
+        tauri('kitsu_detail',      { id: item.id }),
+        tauri('nyaa_episode_list', { title: item.title }),
       ]);
 
-      // Construir el objeto final en una variable local, luego asignar de una vez
-      let base = detailJson.status === 'fulfilled'
+      const base = detailJson.status === 'fulfilled'
         ? JSON.parse(detailJson.value)
         : { ...item };
 
-      // AniList dates (más completas que Kitsu para episodios recientes)
-      // Formato nuevo: { dates: {ep: fecha}, max_aired: N }
-      let allDates = {};
-      let anilistMaxAired = 0;
-      if (datesJson.status === 'fulfilled') {
-        const parsed = JSON.parse(datesJson.value);
-        // Soporte formato viejo (objeto plano) y nuevo ({ dates, max_aired })
-        if (parsed.dates) {
-          allDates = parsed.dates;
-          anilistMaxAired = parsed.max_aired ?? 0;
-        } else {
-          allDates = parsed;
-        }
-        epDates = allDates;
-      }
-
       let episodes = [];
-      if (epsJson.status === 'fulfilled') {
-        const r = JSON.parse(epsJson.value);
-        const today = new Date().toISOString().split('T')[0];
-        const rawEps = (r.episodes ?? []).map(kitsuEpToUnified);
-
-        // Máximo desde fechas de Kitsu (solo eps emitidos)
-        const maxKitsu = rawEps
-          .filter(ep => ep.airdate && ep.airdate <= today)
-          .reduce((max, ep) => Math.max(max, ep.number), 0);
-
-        // Máximo ep conocido en la DB de Kitsu (independiente de fecha)
-        const maxKitsuDb = rawEps.reduce((max, ep) => Math.max(max, ep.number), 0);
-
-        // Máximo desde fechas de AniList (suelen estar más al día)
-        const maxAniList = Object.keys(allDates).reduce((max, k) => {
-          const n = parseInt(k); return isNaN(n) ? max : Math.max(max, n);
-        }, 0);
-
-        // AniList puede numerar diferente a Kitsu para series largas
-        // (One Piece: AniList devuelve 1382 cuando la numeración estándar es 1158).
-        // Solo aceptamos anilistMaxAired si es razonable vs lo que Kitsu tiene.
-        const anilistCapped = anilistMaxAired <= maxKitsuDb + 300 ? anilistMaxAired : 0;
-        const maxAniListCapped = maxAniList <= maxKitsuDb + 300 ? maxAniList : 0;
-
-        // maxAired = episodio más alto confirmado como emitido
-        const maxAired = Math.max(maxKitsu, maxKitsuDb, maxAniListCapped, anilistCapped);
-        const cap = maxAired > 0 ? maxAired + 5 : Infinity;
-
-        // Sintetizar eps que Kitsu no tiene pero cuyo número <= maxAired.
-        // Partimos de maxKitsuDb (no de maxKitsu) para evitar duplicar
-        // los eps que Kitsu tiene pero sin fecha de emisión.
-        const knownNumbers = new Set(rawEps.map(ep => ep.number));
-        const synthEps = [];
-        if (maxAired > maxKitsuDb) {
-          for (let n = maxKitsuDb + 1; n <= maxAired; n++) {
-            if (!knownNumbers.has(n)) {
-              synthEps.push({ id: `synth-${n}`, number: n, title: null, airdate: allDates[String(n)] ?? null, thumbnail: null });
-            }
-          }
-        }
-
-        episodes = [...rawEps, ...synthEps]
-          .filter(ep => ep.number <= cap)
-          .sort((a, b) => b.number - a.number);
-        kitsuEpsMore = false;
-      } else {
-        error = 'Episodios: ' + String(epsJson.reason);
+      if (episodesResult.status === 'fulfilled') {
+        // nyaa_episode_list devuelve Vec<u32> serializado como array JS, ya ordenado desc
+        episodes = episodesResult.value.map(n => ({
+          id: `nyaa-${n}`, number: n, title: null, airdate: null, thumbnail: null
+        }));
       }
 
       detail = { ...base, episodes };
     } catch(e) { error = String(e); }
     finally { loading = false; }
-  }
-
-  async function loadMoreKitsuEps() {
-    if (!detail) return;
-    const nextPage = kitsuEpsPage + 1;
-    try {
-      const json = await tauri('kitsu_episodes', { animeId: detail.id, page: nextPage });
-      const r = JSON.parse(json);
-      const newEps = (r.episodes ?? []).map(kitsuEpToUnified);
-      detail = { ...detail, episodes: [...detail.episodes, ...newEps].sort((a, b) => b.number - a.number) };
-      kitsuEpsPage = nextPage;
-      kitsuEpsMore = r.has_more ?? false;
-    } catch(e) { error = String(e); }
-  }
-
-  // Normaliza episodio Kitsu al formato unificado {id, number, title}
-  function kitsuEpToUnified(ep) {
-    return { id: `k-${ep.id}`, number: ep.number, title: ep.title, airdate: ep.airdate, thumbnail: ep.thumbnail, length_min: ep.length_min };
   }
 
   // ── Player ────────────────────────────────────────────────────────────────

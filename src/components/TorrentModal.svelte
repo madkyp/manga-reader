@@ -24,14 +24,6 @@
 
   $effect(() => { search(autoQuery, activeTab); });
 
-  function isMultiSub(title) {
-    const t = title.toLowerCase();
-    return t.includes('[subsplease]') || t.includes('[erai-raws]') ||
-           t.includes('multi sub') || t.includes('multisub') ||
-           t.includes('multi-sub') || t.includes('[multi]') ||
-           t.includes('multiple sub');
-  }
-
   async function search(q, tab) {
     loading = true; error = ''; results = []; selected = null; fileInfo = null;
     try {
@@ -92,6 +84,19 @@
   function groupTag(title) {
     const m = title.match(/^\[([^\]]+)\]/);
     return m ? m[1] : '';
+  }
+
+  function isMultiSub(title) {
+    const t = title.toLowerCase();
+    return t.includes('[subsplease]') ||
+           t.includes('[erai-raws]') ||
+           t.includes('[judas]') ||
+           t.includes('[ember]') ||
+           t.includes('multi sub') ||
+           t.includes('multisub') ||
+           t.includes('multi-sub') ||
+           t.includes('[multi]') ||
+           t.includes('multiple sub');
   }
 </script>
 
@@ -169,9 +174,9 @@
         <div class="results-list">
           {#each results as r (r.id)}
             <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-            <div class="result-row" onclick={() => selectTorrent(r)}>
+            <div class="result-row" class:multi={isMultiSub(r.title)} onclick={() => selectTorrent(r)}>
               <div class="result-left">
-                {#if isMultiSub(r.title)}<span class="tag multisub">Multi Sub</span>{/if}
+                {#if isMultiSub(r.title)}<span class="tag multi-badge">Multi</span>{/if}
                 {#if groupTag(r.title)}<span class="tag group">{groupTag(r.title)}</span>{/if}
                 {#if qualityTag(r.title)}<span class="tag quality">{qualityTag(r.title)}</span>{/if}
                 <span class="result-title">{r.title.replace(/^\[[^\]]+\]\s*/, '')}</span>
@@ -288,9 +293,10 @@
     padding: 1px 5px; border-radius: 3px;
     flex-shrink: 0; white-space: nowrap;
   }
-  .tag.multisub { background: rgba(245,158,11,0.2); color: var(--primary, #f59e0b); }
-  .tag.group    { background: rgba(99,102,241,0.15); color: #818cf8; }
-  .tag.quality  { background: rgba(16,185,129,0.15); color: #34d399; }
+  .tag.group      { background: rgba(99,102,241,0.15); color: #818cf8; }
+  .tag.quality    { background: rgba(16,185,129,0.15); color: #34d399; }
+  .tag.multi-badge { background: rgba(245,158,11,0.2); color: #f59e0b; }
+  .result-row.multi { border-left: 2px solid rgba(245,158,11,0.4); }
 
   .result-right {
     display: flex; align-items: center; gap: 10px;

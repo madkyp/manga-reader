@@ -92,6 +92,8 @@ fn is_multi_sub(title: &str) -> bool {
     let t = title.to_lowercase();
     t.contains("[subsplease]") ||
     t.contains("[erai-raws]") ||
+    t.contains("[judas]") ||
+    t.contains("[ember]") ||
     t.contains("multi sub") ||
     t.contains("multisub") ||
     t.contains("multi-sub") ||
@@ -213,6 +215,82 @@ fn parse_rss(xml: &str, base: &str) -> Result<Vec<NyaaResult>, String> {
     }
 
     Ok(results)
+}
+
+/// Lista los números de episodio disponibles en AnimeToSho para un título de anime.
+/// Consulta AnimeToSho para el título dado, encuentra el episodio más alto publicado
+/// y devuelve la lista secuencial completa 1..=max_ep (más reciente primero).
+/// AnimeToSho ordena por fecha desc, así que los primeros resultados ya tienen el
+/// número más alto y no hace falta paginar todos los episodios históricos.
+#[tauri::command]
+pub fn nyaa_episode_list(title: String) -> Result<Vec<u32>, String> {
+    let client = super::shared_client();
+    // Patrón típico de fansubs: "[SubsPlease] One Piece - 1158 (1080p)"
+    let re = Regex::new(r" - (\d{1,4})(?:[v\s\(\[._-]|$)").unwrap();
+    let mut max_ep: u32 = 0;
+
+    // Unos pocos intentos con distintos filtros para asegurar que encontramos
+    // el número más alto incluso si la primera consulta devuelve poco.
+    let queries = [
+        format!("{}", title),
+        format!("{} 1080p", title),
+        format!("{} 720p", title),
+    ];
+
+    'outer: for q in &queries {
+        let encoded = urlencoding::encode(q).into_owned();
+        let url = format!(
+            "https://feed.animetosho.org/json?q={}&qx=1",
+            encoded
+        );
+
+        let resp = match client
+            .get(&url)
+            .header("Accept", "application/json")
+            .send()
+        {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+
+        if !resp.status().is_success() { continue; }
+
+        let text = match resp.text() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+
+        let arr = match serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|v| v.as_array().cloned())
+        {
+            Some(a) if !a.is_empty() => a,
+            _ => continue,
+        };
+
+        for item in &arr {
+            if let Some(t) = item["title"].as_str() {
+                for cap in re.captures_iter(t) {
+                    if let Ok(n) = cap[1].parse::<u32>() {
+                        if n > max_ep { max_ep = n; }
+                    }
+                }
+            }
+        }
+
+        // Con el primer query que devuelva resultados ya es suficiente,
+        // porque AnimeToSho ordena por fecha desc y el primer resultado
+        // suele ser el episodio más reciente.
+        if max_ep > 0 { break 'outer; }
+    }
+
+    if max_ep == 0 {
+        return Ok(vec![]);
+    }
+
+    // Lista secuencial completa — el episodio más reciente primero
+    let result: Vec<u32> = (1..=max_ep).rev().collect();
+    Ok(result)
 }
 
 /// Descarga el .torrent y devuelve la lista de archivos dentro (nombre + tamaño)

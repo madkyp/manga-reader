@@ -14,18 +14,28 @@
   let loading   = $state(true);
   let error     = $state('');
   let seeking   = $state(false);
+  let embedded  = $state(false); // true = mpv incrustado en ventana (X11/Win), false = externo (Wayland)
+
+  // ── Subtítulos ────────────────────────────────────────────────────────────
+  let subTracks    = $state([]);
+  let activeSubId  = $state(0);   // 0 = sin subs
+  let showSubMenu  = $state(false);
+  let loadingSubs  = $state(false);
 
   // ── Tauri event listeners ─────────────────────────────────────────────────
   let unlisten = [];
 
   onMount(async () => {
-    unlisten.push(await listen('mpv://time-pos', e  => { timePos  = e.payload ?? 0; loading = false; }));
+    unlisten.push(await listen('mpv://time-pos', e  => {
+      if (loading) { loading = false; loadSubTracks(); }
+      timePos = e.payload ?? 0;
+    }));
     unlisten.push(await listen('mpv://duration',  e  => { duration = e.payload ?? 0; }));
     unlisten.push(await listen('mpv://pause',     e  => { paused   = e.payload ?? false; }));
     unlisten.push(await listen('mpv://eof',       () => onclose?.()));
 
     try {
-      await invoke('mpv_open', { path: url });
+      embedded = await invoke('mpv_open', { path: url });
     } catch (e) {
       error = String(e);
       loading = false;
@@ -56,12 +66,28 @@
 
   async function setVolume(e) {
     volume = Number(e.currentTarget.value);
-    try { await invoke('mpv_set_volume', { vol: BigInt(volume) }); } catch {}
+    try { await invoke('mpv_set_volume', { vol: volume }); } catch {}
   }
 
   async function closePlayer() {
     try { await invoke('mpv_close'); } catch {}
     onclose?.();
+  }
+
+  async function loadSubTracks() {
+    loadingSubs = true;
+    try {
+      subTracks = await invoke('mpv_get_tracks');
+      const sel = subTracks.find(t => t.selected);
+      activeSubId = sel ? sel.id : 0;
+    } catch { subTracks = []; }
+    finally { loadingSubs = false; }
+  }
+
+  async function selectSub(id) {
+    activeSubId = id;
+    showSubMenu = false;
+    try { await invoke('mpv_set_sub', { id }); } catch {}
   }
 
   function fmtTime(s) {
@@ -77,22 +103,22 @@
   let pct = $derived(duration > 0 ? (timePos / duration) * 100 : 0);
 </script>
 
-<div class="mpv-wrap">
+<div class="mpv-wrap" class:mpv-wrap-embedded={embedded && !loading && !error}>
   <!-- Pantalla / estado -->
-  <div class="mpv-screen">
+  <div class="mpv-screen" class:mpv-screen-transparent={embedded && !loading && !error}>
     {#if loading && !error}
       <div class="mpv-status">
         <div class="mpv-spinner"></div>
-        <span>Abriendo en mpv…</span>
+        <span>Abriendo reproductor…</span>
       </div>
     {:else if error}
       <div class="mpv-status mpv-err">{error}</div>
-    {:else}
+    {:else if !embedded}
       <div class="mpv-status mpv-playing">
         <svg viewBox="0 0 24 24" fill="currentColor" class="mpv-icon">
           <path d="M8 5v14l11-7z"/>
         </svg>
-        <span>Reproduciendo en ventana mpv</span>
+        <span>Reproduciendo en ventana mpv (Wayland)</span>
       </div>
     {/if}
   </div>
@@ -130,6 +156,43 @@
       <span class="ctrl-time">{fmtTime(timePos)} / {fmtTime(duration)}</span>
 
       <div class="ctrl-spacer"></div>
+
+      <!-- Subtítulos CC -->
+      <div class="cc-wrap">
+        <button
+          class="ctrl-btn cc-btn"
+          class:cc-active={activeSubId !== 0}
+          onclick={() => showSubMenu = !showSubMenu}
+          title="Subtítulos"
+        >
+          {#if loadingSubs}
+            <div class="cc-spinner"></div>
+          {:else}
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-9 8H9.5v-.5h-2v3h2V14H11v1c0 .55-.45 1-1 1H7c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1zm7 0h-1.5v-.5h-2v3h2V14H18v1c0 .55-.45 1-1 1h-3c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1z"/></svg>
+          {/if}
+          CC
+        </button>
+        {#if showSubMenu}
+          <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+          <div class="cc-menu" onclick={(e) => e.stopPropagation()}>
+            <button class="cc-item" class:cc-item-active={activeSubId === 0} onclick={() => selectSub(0)}>
+              <span class="cc-dot"></span> Sin subtítulos
+            </button>
+            {#each subTracks as t}
+              <button class="cc-item" class:cc-item-active={activeSubId === t.id} onclick={() => selectSub(t.id)}>
+                <span class="cc-dot"></span>
+                {t.title || t.lang || `Pista ${t.id}`}
+                {#if t.lang}<span class="cc-lang">{t.lang.toUpperCase()}</span>{/if}
+                {#if t.external}<span class="cc-ext">EXT</span>{/if}
+              </button>
+            {/each}
+            {#if subTracks.length === 0 && !loadingSubs}
+              <div class="cc-empty">Sin pistas detectadas</div>
+            {/if}
+            <button class="cc-item cc-rescan" onclick={loadSubTracks}>↻ Recargar pistas</button>
+          </div>
+        {/if}
+      </div>
 
       <!-- Volumen -->
       <div class="vol-wrap">
@@ -169,6 +232,10 @@
     width: 100%;
     user-select: none;
   }
+  /* En modo incrustado el fondo es transparente para que mpv se vea */
+  .mpv-wrap-embedded {
+    background: transparent;
+  }
 
   /* ── Pantalla ── */
   .mpv-screen {
@@ -177,6 +244,11 @@
     justify-content: center;
     min-height: 200px;
     background: #111;
+  }
+  /* Modo incrustado: sin fondo para que mpv se vea debajo del WebKit */
+  .mpv-screen-transparent {
+    background: transparent !important;
+    min-height: 400px;
   }
   .mpv-status {
     display: flex;
@@ -290,6 +362,93 @@
     width: 12px; height: 12px;
     background: #fff;
     border-radius: 50%;
+  }
+
+  /* ── Subtítulos CC ── */
+  .cc-wrap {
+    position: relative;
+    flex-shrink: 0;
+  }
+
+  .cc-btn {
+    display: flex; align-items: center; gap: 4px;
+    font-size: 10px; font-weight: 700;
+    letter-spacing: 0.04em;
+    padding: 3px 7px;
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 4px;
+    color: rgba(255,255,255,0.7);
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+  }
+  .cc-btn svg { width: 15px; height: 15px; }
+  .cc-btn:hover { color: #fff; border-color: rgba(255,255,255,0.5); }
+  .cc-btn.cc-active { color: var(--primary, #f59e0b); border-color: var(--primary, #f59e0b); }
+
+  .cc-spinner {
+    width: 12px; height: 12px;
+    border: 2px solid rgba(255,255,255,0.2);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+  }
+
+  .cc-menu {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    right: 0;
+    background: rgba(10,10,10,0.97);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px;
+    overflow: hidden;
+    min-width: 200px;
+    max-height: 240px;
+    overflow-y: auto;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.8);
+    z-index: 100;
+  }
+
+  .cc-item {
+    display: flex; align-items: center; gap: 8px;
+    width: 100%; padding: 9px 14px;
+    background: none; border: none;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    color: rgba(255,255,255,0.75);
+    font-size: 12px; text-align: left; cursor: pointer;
+    transition: background 0.1s, color 0.1s;
+  }
+  .cc-item:last-child { border-bottom: none; }
+  .cc-item:hover { background: rgba(255,255,255,0.07); color: #fff; }
+  .cc-item.cc-item-active { color: var(--primary, #f59e0b); font-weight: 700; }
+  .cc-item.cc-item-active .cc-dot { background: var(--primary, #f59e0b); }
+  .cc-item.cc-rescan {
+    font-size: 10px; color: rgba(255,255,255,0.35);
+    border-top: 1px solid rgba(255,255,255,0.08);
+  }
+  .cc-item.cc-rescan:hover { color: rgba(255,255,255,0.7); }
+
+  .cc-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: rgba(255,255,255,0.2); flex-shrink: 0;
+  }
+
+  .cc-lang {
+    font-size: 9px; font-weight: 800;
+    background: rgba(245,158,11,0.15); color: var(--primary, #f59e0b);
+    padding: 1px 5px; border-radius: 3px;
+    letter-spacing: 0.05em; text-transform: uppercase;
+    flex-shrink: 0; margin-left: auto;
+  }
+  .cc-ext {
+    font-size: 9px; font-weight: 800;
+    background: rgba(16,185,129,0.15); color: #34d399;
+    padding: 1px 5px; border-radius: 3px;
+    letter-spacing: 0.05em;
+    flex-shrink: 0;
+  }
+  .cc-empty {
+    padding: 10px 14px;
+    font-size: 11px; color: rgba(255,255,255,0.3);
+    text-align: center;
   }
 
   /* Título */
