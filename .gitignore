@@ -4,3 +4,5 @@ src-tauri/target/
 *.tar.gz
 *.zip
 *.AppImage
+src-tauri/resources/*.exe
+src-tauri/resources/*.dll
