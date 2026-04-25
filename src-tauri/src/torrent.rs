@@ -16,6 +16,8 @@ use librqbit::{
 
 // Inicializado en lib.rs setup() con app.path().resource_dir()
 pub static RESOURCE_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+// Inicializado en lib.rs setup() con app.path().app_data_dir() — cross-platform
+pub static DATA_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 
 fn ff_bin(name: &str) -> std::path::PathBuf {
     let fname = if cfg!(windows) { format!("{}.exe", name) } else { name.to_string() };
@@ -81,10 +83,26 @@ fn transmux_sources() -> Arc<Mutex<HashMap<String, TransmuxSource>>> {
 }
 
 fn download_dir() -> PathBuf {
-    let base = std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp"));
-    base.join(".local/share/foundry/torrents")
+    // Usa el data_dir de Tauri (cross-platform) si está disponible
+    if let Some(dir) = DATA_DIR.get() {
+        return dir.join("torrents");
+    }
+    // Fallback por plataforma
+    #[cfg(windows)]
+    {
+        let base = std::env::var("LOCALAPPDATA")
+            .or_else(|_| std::env::var("APPDATA"))
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| std::env::temp_dir());
+        base.join("foundry").join("torrents")
+    }
+    #[cfg(not(windows))]
+    {
+        let base = std::env::var("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| std::env::temp_dir());
+        base.join(".local/share/foundry/torrents")
+    }
 }
 
 async fn ensure_session() -> Result<std::sync::Arc<Session>, String> {

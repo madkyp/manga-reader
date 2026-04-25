@@ -103,10 +103,15 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
         .setup(|app| {
-            // Guardar el resource_dir real para que ff_bin() pueda encontrar ffmpeg
+            // Guardar el resource_dir real para que ff_bin() / mpv_bin() encuentren los binarios
             if let Ok(dir) = app.path().resource_dir() {
                 eprintln!("[setup] resource_dir = {}", dir.display());
                 torrent::RESOURCE_DIR.set(dir).ok();
+            }
+            // Guardar el data_dir cross-platform para download_dir() en torrents
+            if let Ok(dir) = app.path().app_data_dir() {
+                eprintln!("[setup] data_dir = {}", dir.display());
+                torrent::DATA_DIR.set(dir).ok();
             }
 
             if cfg!(debug_assertions) {
