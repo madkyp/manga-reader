@@ -229,13 +229,30 @@ pub fn nyaa_episode_list(title: String) -> Result<Vec<u32>, String> {
     let re = Regex::new(r" - (\d{1,4})(?:[v\s\(\[._-]|$)").unwrap();
     let mut max_ep: u32 = 0;
 
-    // Unos pocos intentos con distintos filtros para asegurar que encontramos
-    // el número más alto incluso si la primera consulta devuelve poco.
-    let queries = [
-        format!("{}", title),
+    // Fallback: título base antes de ':' o '-' (p.ej. "Jujutsu Kaisen: Shimetsu" → "Jujutsu Kaisen")
+    let base_title = title
+        .split(':')
+        .next()
+        .unwrap_or(&title)
+        .trim()
+        .to_string();
+
+    // Variante sin caracteres especiales: "Jujutsu Kaisen: Shimetsu" → "Jujutsu Kaisen Shimetsu"
+    let clean_title = title.replace(':', " ").replace("  ", " ").trim().to_string();
+
+    let mut seen = std::collections::HashSet::new();
+    let mut queries: Vec<String> = Vec::new();
+    for q in [
+        title.clone(),
+        clean_title,
         format!("{} 1080p", title),
         format!("{} 720p", title),
-    ];
+        base_title.clone(),
+        format!("{} 1080p", base_title),
+        format!("{} 720p", base_title),
+    ] {
+        if seen.insert(q.clone()) { queries.push(q); }
+    }
 
     'outer: for q in &queries {
         let encoded = urlencoding::encode(q).into_owned();
