@@ -178,8 +178,9 @@
   let kitsuEpsMore = $state(false);
 
   async function openAnime(item) {
-    detailSource = activeSource;
-    if (activeSource === 'kitsu') { await openKitsuAnime(item); return; }
+    const src = item.source ?? activeSource;
+    detailSource = src;
+    if (src === 'kitsu') { await openKitsuAnime(item); return; }
 
     subView = 'detail';
     detail = { ...item, episodes: [], genres: [], synopsis: '', status: '' };
