@@ -87,16 +87,7 @@
   }
 
   function isMultiSub(title) {
-    const t = title.toLowerCase();
-    return t.includes('[subsplease]') ||
-           t.includes('[erai-raws]') ||
-           t.includes('[judas]') ||
-           t.includes('[ember]') ||
-           t.includes('multi sub') ||
-           t.includes('multisub') ||
-           t.includes('multi-sub') ||
-           t.includes('[multi]') ||
-           t.includes('multiple sub');
+    return /\bmulti[-\s]?sub/i.test(title) || /\[multi\]/i.test(title);
   }
 </script>
 
