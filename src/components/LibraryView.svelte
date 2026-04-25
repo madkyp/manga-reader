@@ -4,7 +4,13 @@
   import { animeLibrary, toggleAnimeLibrary, openAnimeFromLibrary } from '../stores/anime.js';
 
   let tab      = $state('manga'); // 'manga' | 'anime'
+  let animeTab = $state('flv');   // 'flv' | 'kitsu'
   let feedback = $state('');      // mensaje temporal de éxito/error
+
+  // Ítems filtrados por sub-pestaña (compat: sin source → flv)
+  let animeFiltered = $derived(
+    $animeLibrary.filter(e => (e.source ?? 'flv') === animeTab)
+  );
 
   function showFeedback(msg) {
     feedback = msg;
@@ -144,17 +150,31 @@
     {/if}
 
   {:else}
-    {#if $animeLibrary.length === 0}
+    <!-- Sub-pestañas AnimeFLV / Torrent -->
+    <div class="anime-subtabs">
+      <button class="subtab" class:active={animeTab === 'flv'} onclick={() => animeTab = 'flv'}>
+        <svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13"><path d="M8 5v14l11-7z"/></svg>
+        AnimeFLV
+        <span class="subtab-count">{$animeLibrary.filter(e => (e.source ?? 'flv') === 'flv').length}</span>
+      </button>
+      <button class="subtab" class:active={animeTab === 'kitsu'} onclick={() => animeTab = 'kitsu'}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        Torrent
+        <span class="subtab-count">{$animeLibrary.filter(e => (e.source ?? 'flv') === 'kitsu').length}</span>
+      </button>
+    </div>
+
+    {#if animeFiltered.length === 0}
       <div class="empty">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
           <polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/>
         </svg>
-        <p>Sin animes en biblioteca</p>
+        <p>Sin animes en {animeTab === 'flv' ? 'AnimeFLV' : 'Torrent'}</p>
         <span>Abre un anime y pulsa "Añadir a biblioteca"</span>
       </div>
     {:else}
       <div class="grid">
-        {#each $animeLibrary as item (item.id)}
+        {#each animeFiltered as item (item.id)}
           <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
           <div class="card" onclick={() => openAnimeFromLibrary(item)}>
             <div class="cover-wrap">
@@ -259,6 +279,37 @@
   }
   .tab:hover { color: var(--text); }
   .tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+
+  /* ── Sub-pestañas anime ── */
+  .anime-subtabs {
+    display: flex;
+    gap: 6px;
+    padding: 10px 14px 4px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  .subtab {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 20px;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .subtab:hover { color: var(--text); background: rgba(255,255,255,0.09); }
+  .subtab.active { color: var(--primary); background: rgba(245,158,11,0.12); border-color: rgba(245,158,11,0.3); }
+  .subtab-count {
+    font-size: 10px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 10px;
+    padding: 1px 6px;
+  }
+  .subtab.active .subtab-count { background: rgba(245,158,11,0.2); }
 
   /* ── Empty ── */
   .empty {

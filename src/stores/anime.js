@@ -15,12 +15,12 @@ function saveAnimeLibrary(l) {
 }
 export const animeLibrary = writable(loadAnimeLibrary());
 
-export function toggleAnimeLibrary(item) {
+export function toggleAnimeLibrary(item, source = 'flv') {
     animeLibrary.update(lib => {
         const exists = lib.some(e => e.id === item.id);
         const next = exists
             ? lib.filter(e => e.id !== item.id)
-            : [...lib, { id: item.id, title: item.title, image: item.image }];
+            : [...lib, { id: item.id, title: item.title, image: item.image, source }];
         saveAnimeLibrary(next);
         return next;
     });
