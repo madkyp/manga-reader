@@ -1,18 +1,72 @@
 /// Controla mpv (binario del sistema) a través de su socket IPC JSON.
 /// En X11/Windows: mpv se incrusta en la ventana Tauri via --wid.
 /// En Wayland: mpv abre ventana propia (externa).
+///
+/// Transport IPC:
+///   Unix/Linux/macOS → Unix domain socket (/tmp/foundry-mpv.sock)
+///   Windows         → Named pipe        (\\.\pipe\foundry-mpv)
 
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
 use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Emitter};
 
-const SOCKET: &str = "/tmp/foundry-mpv.sock";
+// ── IPC transport cross-platform ─────────────────────────────────────────────
 
-static WRITER: OnceLock<Mutex<Option<UnixStream>>> = OnceLock::new();
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
+
+/// Stream de IPC: UnixStream en Unix, File (named pipe) en Windows.
+#[cfg(unix)]
+type IpcStream = UnixStream;
+#[cfg(windows)]
+type IpcStream = std::fs::File;
+
+/// En Unix: ruta del socket. En Windows: nombre del pipe (mpv añade \\.\pipe\).
+#[cfg(unix)]
+const IPC_PATH: &str = "/tmp/foundry-mpv.sock";
+#[cfg(windows)]
+const IPC_PATH: &str = r"\\.\pipe\foundry-mpv";
+
+fn ipc_server_arg() -> String {
+    #[cfg(unix)]
+    { format!("--input-ipc-server={}", IPC_PATH) }
+    #[cfg(windows)]
+    { "--input-ipc-server=foundry-mpv".to_string() }
+}
+
+fn ipc_connect() -> Result<IpcStream, String> {
+    #[cfg(unix)]
+    { UnixStream::connect(IPC_PATH).map_err(|e| e.to_string()) }
+    #[cfg(windows)]
+    {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(IPC_PATH)
+            .map_err(|e| e.to_string())
+    }
+}
+
+fn ipc_ready() -> bool {
+    #[cfg(unix)]
+    { std::path::Path::new(IPC_PATH).exists() }
+    #[cfg(windows)]
+    { std::fs::OpenOptions::new().read(true).write(true).open(IPC_PATH).is_ok() }
+}
+
+fn ipc_cleanup() {
+    #[cfg(unix)]
+    { let _ = std::fs::remove_file(IPC_PATH); }
+    #[cfg(windows)]
+    {} // los named pipes se limpian solos al cerrar el servidor
+}
+
+// ── Estado global ─────────────────────────────────────────────────────────────
+
+static WRITER: OnceLock<Mutex<Option<IpcStream>>> = OnceLock::new();
 static PID:    OnceLock<Mutex<Option<u32>>>        = OnceLock::new();
 
-fn writer() -> &'static Mutex<Option<UnixStream>> {
+fn writer() -> &'static Mutex<Option<IpcStream>> {
     WRITER.get_or_init(|| Mutex::new(None))
 }
 fn pid_slot() -> &'static Mutex<Option<u32>> {
@@ -20,6 +74,7 @@ fn pid_slot() -> &'static Mutex<Option<u32>> {
 }
 
 // ── Busca el binario de mpv (bundle > junto al exe > PATH) ───────────────────
+
 fn mpv_bin() -> std::path::PathBuf {
     let fname = if cfg!(windows) { "mpv.exe" } else { "mpv" };
     if let Some(dir) = crate::torrent::RESOURCE_DIR.get() {
@@ -36,27 +91,22 @@ fn mpv_bin() -> std::path::PathBuf {
     std::path::PathBuf::from(fname)
 }
 
-// ── Detección de plataforma y WID ────────────────────────────────────────────
+// ── Detección de plataforma para embedding ───────────────────────────────────
 
-/// Devuelve el XID/HWND de la ventana si el entorno soporta embedding.
-/// Devuelve None en Wayland o plataformas no soportadas.
 fn get_embed_wid(window: &tauri::WebviewWindow) -> Option<u64> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
-    // En Wayland no hay embedding de ventanas nativas
     #[cfg(target_os = "linux")]
-    if is_wayland() {
-        return None;
-    }
+    if is_wayland() { return None; }
 
     let handle = window.window_handle().ok()?;
     match handle.as_raw() {
         #[cfg(target_os = "linux")]
-        RawWindowHandle::Xlib(h)  => Some(h.window as u64),       // c_ulong
+        RawWindowHandle::Xlib(h)  => Some(h.window as u64),
         #[cfg(target_os = "linux")]
-        RawWindowHandle::Xcb(h)   => Some(h.window.get() as u64), // NonZeroU32
+        RawWindowHandle::Xcb(h)   => Some(h.window.get() as u64),
         #[cfg(target_os = "windows")]
-        RawWindowHandle::Win32(h) => Some(h.hwnd.get() as u64),   // NonZero<isize>
+        RawWindowHandle::Win32(h) => Some(h.hwnd.get() as u64),
         _ => None,
     }
 }
@@ -69,28 +119,25 @@ fn is_wayland() -> bool {
     }
 }
 
-// ── Baja la ventana hijo de mpv al fondo del z-order (X11) ──────────────────
-/// Después de que mpv crea su ventana hijo dentro de parent_xid,
-/// la bajamos debajo del WebKit para que el overlay transparente funcione.
+// ── Baja la ventana hijo de mpv al fondo del z-order (X11 únicamente) ────────
+
 #[cfg(target_os = "linux")]
 fn lower_mpv_child(parent_xid: u64) {
     use x11rb::connection::Connection;
     use x11rb::protocol::xproto::{ConfigureWindowAux, ConnectionExt, StackMode};
 
     let Ok((conn, _)) = x11rb::rust_connection::RustConnection::connect(None) else { return };
-
-    // query_tree devuelve hijos en orden bottom-to-top; el último es el más reciente (mpv)
     let Ok(cookie) = conn.query_tree(parent_xid as u32) else { return };
     let Ok(reply)  = cookie.reply() else { return };
 
     if let Some(&top) = reply.children.last() {
-        // StackMode::Below sin sibling baja el hijo al fondo del stack
         let _ = conn.configure_window(top, &ConfigureWindowAux::new().stack_mode(StackMode::BELOW));
         let _ = conn.flush();
     }
 }
 
 // ── Envío de comandos IPC ────────────────────────────────────────────────────
+
 fn send(args: serde_json::Value) -> Result<(), String> {
     let mut guard = writer().lock().unwrap();
     let stream = guard.as_mut().ok_or("mpv no está activo")?;
@@ -100,22 +147,22 @@ fn send(args: serde_json::Value) -> Result<(), String> {
     stream.write_all(msg.as_bytes()).map_err(|e| e.to_string())
 }
 
-// ── Comando principal ────────────────────────────────────────────────────────
+// ── Comando principal ─────────────────────────────────────────────────────────
 
 /// Abre (o reemplaza) la reproducción.
-/// Devuelve `true` si el vídeo se incrustra en la ventana Tauri (X11/Windows),
+/// Devuelve `true` si el vídeo se incrusta en la ventana Tauri (X11/Windows),
 /// `false` si mpv abre ventana propia (Wayland/macOS).
 #[tauri::command]
 pub fn mpv_open(path: String, window: tauri::WebviewWindow, app: AppHandle) -> Result<bool, String> {
     mpv_close().ok();
-    let _ = std::fs::remove_file(SOCKET);
+    ipc_cleanup();
 
     let embed_wid = get_embed_wid(&window);
     let embedded  = embed_wid.is_some();
 
     let mut args: Vec<String> = vec![
         path,
-        format!("--input-ipc-server={}", SOCKET),
+        ipc_server_arg(),
         "--keep-open=yes".into(),
         "--sub-auto=fuzzy".into(),
         "--input-default-bindings=yes".into(),
@@ -139,25 +186,21 @@ pub fn mpv_open(path: String, window: tauri::WebviewWindow, app: AppHandle) -> R
 
     *pid_slot().lock().unwrap() = Some(child.id());
 
-    // Hilo: espera socket, conecta, reenvía eventos
     std::thread::spawn(move || {
-        // Esperar hasta 5 s a que mpv cree el socket
-        let mut connected = false;
+        // Esperar hasta 5 s a que mpv cree el endpoint IPC
+        let mut ready = false;
         for _ in 0..50 {
             std::thread::sleep(std::time::Duration::from_millis(100));
-            if std::path::Path::new(SOCKET).exists() {
-                connected = true;
-                break;
-            }
+            if ipc_ready() { ready = true; break; }
         }
-        if !connected {
+        if !ready {
             let _ = app.emit("mpv://error", "mpv no creó el socket IPC");
             return;
         }
 
-        let stream = match UnixStream::connect(SOCKET) {
+        let stream = match ipc_connect() {
             Ok(s) => s,
-            Err(e) => { let _ = app.emit("mpv://error", format!("Socket: {}", e)); return; }
+            Err(e) => { let _ = app.emit("mpv://error", format!("IPC: {}", e)); return; }
         };
         let reader_stream = match stream.try_clone() {
             Ok(s) => s,
@@ -165,7 +208,7 @@ pub fn mpv_open(path: String, window: tauri::WebviewWindow, app: AppHandle) -> R
         };
         *writer().lock().unwrap() = Some(stream);
 
-        // En X11: bajar la ventana hijo de mpv al fondo (detrás del WebKit)
+        // En X11: bajar ventana hijo de mpv debajo del WebKit
         #[cfg(target_os = "linux")]
         if let Some(wid) = embed_wid {
             std::thread::sleep(std::time::Duration::from_millis(150));
@@ -202,13 +245,13 @@ pub fn mpv_open(path: String, window: tauri::WebviewWindow, app: AppHandle) -> R
 
         *writer().lock().unwrap() = None;
         *pid_slot().lock().unwrap() = None;
-        let _ = std::fs::remove_file(SOCKET);
+        ipc_cleanup();
     });
 
     Ok(embedded)
 }
 
-// ── Controles de reproducción ────────────────────────────────────────────────
+// ── Controles de reproducción ─────────────────────────────────────────────────
 
 #[tauri::command]
 pub fn mpv_pause_toggle() -> Result<(), String> {
@@ -232,7 +275,7 @@ pub fn mpv_close() -> Result<(), String> {
     if let Some(pid) = pid_slot().lock().unwrap().take() {
         libc_kill(pid);
     }
-    let _ = std::fs::remove_file(SOCKET);
+    ipc_cleanup();
     Ok(())
 }
 
@@ -243,7 +286,7 @@ pub fn mpv_raw_command(cmd: String, args: Vec<String>) -> Result<(), String> {
     send(serde_json::Value::Array(arr))
 }
 
-// ── Pistas de subtítulos ─────────────────────────────────────────────────────
+// ── Pistas de subtítulos ──────────────────────────────────────────────────────
 
 #[derive(serde::Serialize)]
 pub struct SubTrack {
@@ -255,8 +298,10 @@ pub struct SubTrack {
 }
 
 fn query(args: serde_json::Value) -> Result<serde_json::Value, String> {
-    let mut stream = UnixStream::connect(SOCKET)
-        .map_err(|_| "mpv no está activo".to_string())?;
+    let mut stream = ipc_connect().map_err(|_| "mpv no está activo".to_string())?;
+
+    // Timeout de lectura (solo disponible en Unix)
+    #[cfg(unix)]
     stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).ok();
 
     let req = serde_json::json!({ "command": args, "request_id": 1 });
@@ -306,10 +351,20 @@ pub fn mpv_set_sub(id: i64) -> Result<(), String> {
     }
 }
 
-// ── Kill por PID ─────────────────────────────────────────────────────────────
+// ── Kill por PID ──────────────────────────────────────────────────────────────
+
 #[cfg(unix)]
 fn libc_kill(pid: u32) {
     unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM); }
 }
-#[cfg(not(unix))]
+
+#[cfg(windows)]
+fn libc_kill(pid: u32) {
+    // Fallback si el quit IPC no funcionó
+    let _ = std::process::Command::new("taskkill")
+        .args(["/F", "/PID", &pid.to_string()])
+        .spawn();
+}
+
+#[cfg(not(any(unix, windows)))]
 fn libc_kill(_pid: u32) {}
