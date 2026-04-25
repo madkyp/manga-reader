@@ -35,30 +35,37 @@ jobs:
           New-Item -ItemType Directory -Force -Path "src-tauri/resources" | Out-Null
           Copy-Item $bin.FullName   "src-tauri/resources/ffmpeg.exe"
           Copy-Item $probe.FullName "src-tauri/resources/ffprobe.exe"
-          Write-Host "ffmpeg:  $((Get-Item 'src-tauri/resources/ffmpeg.exe').Length) bytes"
-          Write-Host "ffprobe: $((Get-Item 'src-tauri/resources/ffprobe.exe').Length) bytes"
+          Write-Host "ffmpeg:  $([math]::Round((Get-Item 'src-tauri/resources/ffmpeg.exe').Length/1MB,1)) MB"
+          Write-Host "ffprobe: $([math]::Round((Get-Item 'src-tauri/resources/ffprobe.exe').Length/1MB,1)) MB"
+
+      - name: Download mpv
+        run: |
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest" -Headers @{"User-Agent"="CI"}
+          $asset   = $release.assets | Where-Object { $_.name -match "^mpv-x86_64-\d+-git-[a-f0-9]+\.7z$" } | Select-Object -First 1
+          Write-Host "Descargando $($asset.name)..."
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "mpv.7z"
+          7z e mpv.7z mpv.exe d3dcompiler_43.dll -o"src-tauri/resources/" -y
+          Write-Host "mpv.exe: $([math]::Round((Get-Item 'src-tauri/resources/mpv.exe').Length/1MB,1)) MB"
 
       - name: Install dependencies
         run: npm ci
 
       - name: Build
-        run: |
-          Set-Content -Path "src-tauri/resources-override.json" -Value '{"bundle":{"resources":["resources/ffmpeg.exe","resources/ffprobe.exe"]}}' -Encoding UTF8
-          npm run tauri build -- --bundles nsis --config src-tauri/resources-override.json
+        run: npm run tauri build -- --bundles nsis
         env:
           TAURI_SIGNING_PRIVATE_KEY: ""
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
 
-      - name: Verify installer size (debe ser >100 MB con ffmpeg)
+      - name: Verify installer (debe incluir ffmpeg + mpv)
         run: |
           $installer = Get-ChildItem "src-tauri/target/release/bundle/nsis/*.exe" | Select-Object -First 1
           $mb = [math]::Round($installer.Length / 1MB, 1)
-          Write-Host "Installer: $($installer.FullName) — $mb MB"
-          if ($installer.Length -lt 50MB) {
-            Write-Error "FALLO: el instalador es demasiado pequeño ($mb MB) — ffmpeg no fue incluido"
+          Write-Host "Installer: $($installer.Name) — $mb MB"
+          if ($installer.Length -lt 150MB) {
+            Write-Error "FALLO: instalador demasiado pequeño ($mb MB) — faltan binarios"
             exit 1
           }
-          Write-Host "OK: ffmpeg incluido (tamaño razonable)"
+          Write-Host "OK: ffmpeg + mpv incluidos"
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
@@ -112,7 +119,7 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ""
 
-      - name: Patch AppImage (bundle ffmpeg + fix AppRun)
+      - name: Patch AppImage (bundle ffmpeg + forzar X11)
         run: |
           APPIMAGE=$(find src-tauri/target/release/bundle/appimage -name "*.AppImage" | head -1)
           echo "Patching $APPIMAGE"
@@ -122,14 +129,10 @@ jobs:
           cp src-tauri/binaries/ffprobe squashfs-root/usr/bin/ffprobe
           chmod +x squashfs-root/usr/bin/ffmpeg squashfs-root/usr/bin/ffprobe
 
-          echo "--- Tipo de AppRun original ---"
-          file squashfs-root/AppRun
           mv squashfs-root/AppRun squashfs-root/AppRun.real
           chmod +x squashfs-root/AppRun.real
           printf '#!/bin/bash\nunset WAYLAND_DISPLAY\nexport GDK_BACKEND=x11\nexport WEBKIT_DISABLE_DMABUF_RENDERER=1\nAPPDIR="${APPDIR:-$(dirname "$(readlink -f "$0")")}"\nexport PATH="$APPDIR/usr/bin:$PATH"\nexec "$APPDIR/AppRun.real" "$@"\n' > squashfs-root/AppRun
           chmod +x squashfs-root/AppRun
-          echo "--- AppRun wrapper ---"
-          cat squashfs-root/AppRun
 
           wget -q "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" -O appimagetool
           chmod +x appimagetool
