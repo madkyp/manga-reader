@@ -218,30 +218,25 @@ fn parse_rss(xml: &str, base: &str) -> Result<Vec<NyaaResult>, String> {
 }
 
 /// Lista los episodios disponibles en Nyaa.si para un título de anime.
-/// Usa el RSS de Nyaa.si (rápido, sin Cloudflare) en lugar de AnimeToSho.
-/// Extrae números de episodio de los títulos RSS, encuentra el máximo y devuelve
-/// la lista completa 1..=max_ep (más reciente primero).
+/// Devuelve los números de episodio reales encontrados en el RSS (no una lista sintética).
 #[tauri::command]
 pub fn nyaa_episode_list(title: String) -> Result<Vec<u32>, String> {
     let client = super::shared_client();
-    // Patrón típico de fansubs: "[SubsPlease] Anime - 12 (1080p)" o "- 12v2"
-    let re_ep = Regex::new(r" - (\d{1,4})(?:[v\s\(\[._-]|$)").unwrap();
-    // Regex para extraer el <title> de cada <item> en el RSS
+    let re_ep    = Regex::new(r" - (\d{1,4})(?:[v\s\(\[._-]|$)").unwrap();
     let re_title = Regex::new(r"<title>(?:<!\[CDATA\[(.*?)\]\]>|([^<]*))</title>").unwrap();
 
-    // Variantes del título de más específica a más general
-    let base = title.split(':').next().unwrap_or(&title).trim().to_string();
+    let base  = title.split(':').next().unwrap_or(&title).trim().to_string();
     let clean = title.replace(':', " ").replace("  ", " ").trim().to_string();
 
+    // (query, limite_items): título exacto/limpio usan todos los items;
+    // título base limita a 30 (RSS ordenado por fecha → 30 primeros = temporada actual)
     let mut seen = std::collections::HashSet::new();
-    let mut queries: Vec<String> = Vec::new();
-    for q in [title.clone(), clean, base] {
-        if seen.insert(q.clone()) { queries.push(q); }
+    let mut queries: Vec<(String, usize)> = Vec::new();
+    for (q, lim) in [(title.clone(), 75usize), (clean, 75), (base, 30)] {
+        if seen.insert(q.clone()) { queries.push((q, lim)); }
     }
 
-    let mut max_ep: u32 = 0;
-
-    'outer: for q in &queries {
+    for (q, limit) in &queries {
         let encoded = urlencoding::encode(q).into_owned();
         let url = format!("https://nyaa.si/?page=rss&q={}&c=1_2&f=0", encoded);
 
@@ -255,26 +250,29 @@ pub fn nyaa_episode_list(title: String) -> Result<Vec<u32>, String> {
             Err(_) => continue,
         };
 
-        // Primer <title> es el canal — saltarlo
+        let mut episodes = std::collections::BTreeSet::<u32>::new();
         let mut first = true;
+        let mut count = 0usize;
         for cap in re_title.captures_iter(&text) {
-            if first { first = false; continue; }
+            if first { first = false; continue; } // título del canal RSS
+            count += 1;
+            if count > *limit { break; }
             let t = cap.get(1).or(cap.get(2)).map(|m| m.as_str()).unwrap_or("");
             for ep_cap in re_ep.captures_iter(t) {
                 if let Ok(n) = ep_cap[1].parse::<u32>() {
-                    if n > max_ep { max_ep = n; }
+                    if n > 0 { episodes.insert(n); }
                 }
             }
         }
 
-        if max_ep > 0 { break 'outer; }
+        if !episodes.is_empty() {
+            let mut result: Vec<u32> = episodes.into_iter().collect();
+            result.sort_unstable_by(|a, b| b.cmp(a));
+            return Ok(result);
+        }
     }
 
-    if max_ep == 0 {
-        return Ok(vec![]);
-    }
-
-    Ok((1..=max_ep).rev().collect())
+    Ok(vec![])
 }
 
 /// Descarga el .torrent y devuelve la lista de archivos dentro (nombre + tamaño)
