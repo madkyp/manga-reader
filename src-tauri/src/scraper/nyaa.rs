@@ -217,62 +217,46 @@ fn parse_rss(xml: &str, base: &str) -> Result<Vec<NyaaResult>, String> {
     Ok(results)
 }
 
-/// Lista los episodios disponibles en Nyaa.si para un título de anime.
-/// Devuelve los números de episodio reales encontrados en el RSS (no una lista sintética).
+/// Obtiene la lista de episodios de un anime consultando la API de AniList.
+/// Para anime en emisión usa el último episodio al aire; para completados el total.
 #[tauri::command]
 pub fn nyaa_episode_list(title: String) -> Result<Vec<u32>, String> {
     let client = super::shared_client();
-    let re_ep    = Regex::new(r" - (\d{1,4})(?:[v\s\(\[._-]|$)").unwrap();
-    let re_title = Regex::new(r"<title>(?:<!\[CDATA\[(.*?)\]\]>|([^<]*))</title>").unwrap();
 
-    let base  = title.split(':').next().unwrap_or(&title).trim().to_string();
-    let clean = title.replace(':', " ").replace("  ", " ").trim().to_string();
+    let gql = r#"query($s:String){Media(search:$s,type:ANIME){episodes nextAiringEpisode{episode}}}"#;
+    let body = serde_json::json!({
+        "query": gql,
+        "variables": { "s": title }
+    });
 
-    // (query, limite_items): título exacto/limpio usan todos los items;
-    // título base limita a 30 (RSS ordenado por fecha → 30 primeros = temporada actual)
-    let mut seen = std::collections::HashSet::new();
-    let mut queries: Vec<(String, usize)> = Vec::new();
-    for (q, lim) in [(title.clone(), 75usize), (clean, 75), (base, 30)] {
-        if seen.insert(q.clone()) { queries.push((q, lim)); }
+    let resp = client
+        .post("https://graphql.anilist.co")
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .json(&body)
+        .send()
+        .map_err(|e| format!("AniList red: {}", e))?;
+
+    let json: serde_json::Value = resp.json()
+        .map_err(|e| format!("AniList JSON: {}", e))?;
+
+    let media = &json["data"]["Media"];
+
+    // total conocido (null si todavía en emisión sin anuncio final)
+    let total = media["episodes"].as_u64().unwrap_or(0) as u32;
+    // para anime en emisión: próximo ep - 1 = último emitido
+    let aired = media["nextAiringEpisode"]["episode"]
+        .as_u64()
+        .map(|n| (n as u32).saturating_sub(1))
+        .unwrap_or(0);
+
+    let count = if total > 0 { total } else { aired };
+
+    if count == 0 {
+        return Ok(vec![]);
     }
 
-    for (q, limit) in &queries {
-        let encoded = urlencoding::encode(q).into_owned();
-        let url = format!("https://nyaa.si/?page=rss&q={}&c=1_2&f=0", encoded);
-
-        let text = match client
-            .get(&url)
-            .header("User-Agent", "Mozilla/5.0 (compatible; RSS reader)")
-            .send()
-            .and_then(|r| r.text())
-        {
-            Ok(t) => t,
-            Err(_) => continue,
-        };
-
-        let mut episodes = std::collections::BTreeSet::<u32>::new();
-        let mut first = true;
-        let mut count = 0usize;
-        for cap in re_title.captures_iter(&text) {
-            if first { first = false; continue; } // título del canal RSS
-            count += 1;
-            if count > *limit { break; }
-            let t = cap.get(1).or(cap.get(2)).map(|m| m.as_str()).unwrap_or("");
-            for ep_cap in re_ep.captures_iter(t) {
-                if let Ok(n) = ep_cap[1].parse::<u32>() {
-                    if n > 0 { episodes.insert(n); }
-                }
-            }
-        }
-
-        if !episodes.is_empty() {
-            let mut result: Vec<u32> = episodes.into_iter().collect();
-            result.sort_unstable_by(|a, b| b.cmp(a));
-            return Ok(result);
-        }
-    }
-
-    Ok(vec![])
+    Ok((1..=count).rev().collect())
 }
 
 /// Descarga el .torrent y devuelve la lista de archivos dentro (nombre + tamaño)
