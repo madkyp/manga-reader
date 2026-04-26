@@ -24,18 +24,34 @@
 
   $effect(() => { search(autoQuery, activeTab); });
 
+  // Título base antes de ':' — "Jujutsu Kaisen: Shimetsu" → "Jujutsu Kaisen"
+  const baseTitle = animeTitle.includes(':')
+    ? animeTitle.split(':')[0].trim()
+    : null;
+
   async function search(q, tab) {
     loading = true; error = ''; results = []; selected = null; fileInfo = null;
     try {
       let res;
       if (tab === 'nyaa') {
         res = await tauri('nyaa_direct', { query: q.trim() });
+        // Fallback 1: título base + episodio (e.g. "Jujutsu Kaisen 13")
+        if (res.length === 0 && baseTitle && epPadded != null)
+          res = await tauri('nyaa_direct', { query: `${baseTitle} ${epPadded}`.trim() });
+        // Fallback 2: solo título completo sin episodio
         if (res.length === 0 && epPadded != null)
           res = await tauri('nyaa_direct', { query: animeTitle.trim() });
+        // Fallback 3: solo título base sin episodio
+        if (res.length === 0 && baseTitle)
+          res = await tauri('nyaa_direct', { query: baseTitle });
       } else {
         res = await tauri('nyaa_search', { query: q.trim(), category: '1_2' });
+        if (res.length === 0 && baseTitle && epPadded != null)
+          res = await tauri('nyaa_search', { query: `${baseTitle} ${epPadded}`.trim(), category: '1_2' });
         if (res.length === 0 && epPadded != null)
           res = await tauri('nyaa_search', { query: animeTitle.trim(), category: '1_2' });
+        if (res.length === 0 && baseTitle)
+          res = await tauri('nyaa_search', { query: baseTitle, category: '1_2' });
       }
       results = res;
       if (results.length === 0) error = 'Sin resultados para esta búsqueda.';
