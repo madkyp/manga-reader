@@ -225,17 +225,30 @@ fn parse_rss(xml: &str, base: &str) -> Result<Vec<NyaaResult>, String> {
 #[tauri::command]
 pub fn nyaa_episode_list(title: String) -> Result<Vec<u32>, String> {
     let client = super::shared_client();
-    // Patrón típico de fansubs: "[SubsPlease] One Piece - 1158 (1080p)"
-    let re = Regex::new(r" - (\d{1,4})(?:[v\s\(\[._-]|$)").unwrap();
+    // " - 12 " (SubsPlease) o "S03E12" (la mayoría de fansubs)
+    let re = Regex::new(r"(?i)(?:(?: - )(\d{1,4})(?:[v\s\(\[._-]|$)|[Ss]\d{1,2}[Ee](\d{1,4}))").unwrap();
     let mut max_ep: u32 = 0;
 
-    // Unos pocos intentos con distintos filtros para asegurar que encontramos
-    // el número más alto incluso si la primera consulta devuelve poco.
-    let queries = [
-        format!("{}", title),
+    // Si el título tiene subtítulo largo ("Shimetsu Kaiyū Zenpen"), añadir query
+    // con solo la primera palabra del subtítulo ("Jujutsu Kaisen Shimetsu")
+    let short_sub: Option<String> = if title.contains(':') {
+        let sub = title.splitn(2, ':').nth(1).unwrap_or("").trim().to_string();
+        let first_word = sub.split_whitespace().next().unwrap_or("").to_string();
+        let base = title.splitn(2, ':').next().unwrap_or("").trim().to_string();
+        if !first_word.is_empty() && sub.split_whitespace().count() > 1 {
+            Some(format!("{} {}", base, first_word))
+        } else { None }
+    } else { None };
+
+    let mut queries: Vec<String> = vec![
+        title.clone(),
         format!("{} 1080p", title),
         format!("{} 720p", title),
     ];
+    if let Some(s) = short_sub {
+        queries.push(s.clone());
+        queries.push(format!("{} 1080p", s));
+    }
 
     'outer: for q in &queries {
         let encoded = urlencoding::encode(q).into_owned();
@@ -271,7 +284,10 @@ pub fn nyaa_episode_list(title: String) -> Result<Vec<u32>, String> {
         for item in &arr {
             if let Some(t) = item["title"].as_str() {
                 for cap in re.captures_iter(t) {
-                    if let Ok(n) = cap[1].parse::<u32>() {
+                    // grupo 1: " - 12", grupo 2: S03E12
+                    let n_str = cap.get(1).or_else(|| cap.get(2))
+                        .map(|m| m.as_str());
+                    if let Some(Ok(n)) = n_str.map(|s| s.parse::<u32>()) {
                         if n > max_ep { max_ep = n; }
                     }
                 }
