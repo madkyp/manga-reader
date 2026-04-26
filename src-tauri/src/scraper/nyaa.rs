@@ -217,46 +217,61 @@ fn parse_rss(xml: &str, base: &str) -> Result<Vec<NyaaResult>, String> {
     Ok(results)
 }
 
-/// Obtiene la lista de episodios de un anime consultando la API de AniList.
-/// Para anime en emisión usa el último episodio al aire; para completados el total.
+/// Obtiene la lista de episodios consultando la API de AniList.
+/// Prueba varias combinaciones de título y formato para maximizar los aciertos.
 #[tauri::command]
 pub fn nyaa_episode_list(title: String) -> Result<Vec<u32>, String> {
     let client = super::shared_client();
 
-    let gql = r#"query($s:String){Media(search:$s,type:ANIME){episodes nextAiringEpisode{episode}}}"#;
-    let body = serde_json::json!({
-        "query": gql,
-        "variables": { "s": title }
-    });
+    // Título base antes de ':' — "Jujutsu Kaisen: Shimetsu" → "Jujutsu Kaisen"
+    let base = title.split(':').next().unwrap_or(&title).trim().to_string();
 
-    let resp = client
-        .post("https://graphql.anilist.co")
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json")
-        .json(&body)
-        .send()
-        .map_err(|e| format!("AniList red: {}", e))?;
+    // Intentos en orden: primero título exacto, luego base; primero solo TV, luego cualquier formato
+    let mut candidates: Vec<(String, &str)> = vec![
+        (title.clone(),  "TV,TV_SHORT"),
+        (base.clone(),   "TV,TV_SHORT"),
+        (title.clone(),  "TV,TV_SHORT,ONA"),
+        (base.clone(),   "TV,TV_SHORT,ONA"),
+    ];
+    // Deduplicar si base == title
+    if base == title { candidates.retain(|(_, fmt)| *fmt == "TV,TV_SHORT"); }
 
-    let json: serde_json::Value = resp.json()
-        .map_err(|e| format!("AniList JSON: {}", e))?;
+    // GQL con $fmt como string — construimos la query dinámicamente
+    for (search, _fmt) in &candidates {
+        let gql = format!(
+            "query($s:String){{Media(search:$s,type:ANIME,format_in:[{}]){{episodes nextAiringEpisode{{episode}}}}}}",
+            _fmt
+        );
+        let body = serde_json::json!({ "query": gql, "variables": { "s": search } });
 
-    let media = &json["data"]["Media"];
+        let json: serde_json::Value = match client
+            .post("https://graphql.anilist.co")
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .json(&body)
+            .send()
+            .and_then(|r| r.json())
+        {
+            Ok(j) => j,
+            Err(_) => continue,
+        };
 
-    // total conocido (null si todavía en emisión sin anuncio final)
-    let total = media["episodes"].as_u64().unwrap_or(0) as u32;
-    // para anime en emisión: próximo ep - 1 = último emitido
-    let aired = media["nextAiringEpisode"]["episode"]
-        .as_u64()
-        .map(|n| (n as u32).saturating_sub(1))
-        .unwrap_or(0);
+        let media = &json["data"]["Media"];
+        if media.is_null() { continue; }
 
-    let count = if total > 0 { total } else { aired };
+        let total = media["episodes"].as_u64().unwrap_or(0) as u32;
+        let aired = media["nextAiringEpisode"]["episode"]
+            .as_u64()
+            .map(|n| (n as u32).saturating_sub(1))
+            .unwrap_or(0);
 
-    if count == 0 {
-        return Ok(vec![]);
+        let count = if total > 0 { total } else { aired };
+        if count > 0 {
+            return Ok((1..=count).rev().collect());
+        }
     }
 
-    Ok((1..=count).rev().collect())
+    Ok(vec![])
 }
 
 /// Descarga el .torrent y devuelve la lista de archivos dentro (nombre + tamaño)
