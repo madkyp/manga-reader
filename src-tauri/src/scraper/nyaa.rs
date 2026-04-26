@@ -236,10 +236,11 @@ pub fn nyaa_episode_list(title: String) -> Result<Vec<u32>, String> {
     // Deduplicar si base == title
     if base == title { candidates.retain(|(_, fmt)| *fmt == "TV,TV_SHORT"); }
 
-    // GQL con $fmt como string — construimos la query dinámicamente
     for (search, _fmt) in &candidates {
+        // airingSchedule(notYetAired:false) como tercer fallback:
+        // cubre anime terminados donde episodes=null y nextAiringEpisode=null
         let gql = format!(
-            "query($s:String){{Media(search:$s,type:ANIME,format_in:[{}]){{episodes nextAiringEpisode{{episode}}}}}}",
+            "query($s:String){{Media(search:$s,type:ANIME,format_in:[{}]){{episodes nextAiringEpisode{{episode}} airingSchedule(notYetAired:false,sort:[EPISODE_DESC]){{nodes{{episode}}}}}}}}",
             _fmt
         );
         let body = serde_json::json!({ "query": gql, "variables": { "s": search } });
@@ -260,12 +261,20 @@ pub fn nyaa_episode_list(title: String) -> Result<Vec<u32>, String> {
         if media.is_null() { continue; }
 
         let total = media["episodes"].as_u64().unwrap_or(0) as u32;
+
         let aired = media["nextAiringEpisode"]["episode"]
             .as_u64()
             .map(|n| (n as u32).saturating_sub(1))
             .unwrap_or(0);
 
-        let count = if total > 0 { total } else { aired };
+        // Último episodio emitido según el calendario (para series terminadas sin episodes conocido)
+        let last_scheduled = media["airingSchedule"]["nodes"]
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(|n| n["episode"].as_u64())
+            .unwrap_or(0) as u32;
+
+        let count = if total > 0 { total } else if aired > 0 { aired } else { last_scheduled };
         if count > 0 {
             return Ok((1..=count).rev().collect());
         }
