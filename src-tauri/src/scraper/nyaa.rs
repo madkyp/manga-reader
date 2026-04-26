@@ -217,53 +217,80 @@ fn parse_rss(xml: &str, base: &str) -> Result<Vec<NyaaResult>, String> {
     Ok(results)
 }
 
-/// Obtiene el total de episodios de MyAnimeList via Jikan (API pública, sin autenticación).
-/// Devuelve la lista 1..=total (más reciente primero).
+/// Lista los números de episodio disponibles en AnimeToSho para un título de anime.
+/// Consulta AnimeToSho para el título dado, encuentra el episodio más alto publicado
+/// y devuelve la lista secuencial completa 1..=max_ep (más reciente primero).
+/// AnimeToSho ordena por fecha desc, así que los primeros resultados ya tienen el
+/// número más alto y no hace falta paginar todos los episodios históricos.
 #[tauri::command]
 pub fn nyaa_episode_list(title: String) -> Result<Vec<u32>, String> {
     let client = super::shared_client();
+    // Patrón típico de fansubs: "[SubsPlease] One Piece - 1158 (1080p)"
+    let re = Regex::new(r" - (\d{1,4})(?:[v\s\(\[._-]|$)").unwrap();
+    let mut max_ep: u32 = 0;
 
-    // Título base antes de ':' como fallback
-    let base = title.split(':').next().unwrap_or(&title).trim().to_string();
-    let mut searches: Vec<String> = vec![title.clone()];
-    if base != title { searches.push(base); }
+    // Unos pocos intentos con distintos filtros para asegurar que encontramos
+    // el número más alto incluso si la primera consulta devuelve poco.
+    let queries = [
+        format!("{}", title),
+        format!("{} 1080p", title),
+        format!("{} 720p", title),
+    ];
 
-    for search in &searches {
-        let encoded = urlencoding::encode(search).into_owned();
+    'outer: for q in &queries {
+        let encoded = urlencoding::encode(q).into_owned();
+        let url = format!(
+            "https://feed.animetosho.org/json?q={}&qx=1",
+            encoded
+        );
 
-        // Primero intenta solo series TV; si no hay episodios, intenta sin filtro
-        for type_param in &["&type=tv", ""] {
-            let url = format!(
-                "https://api.jikan.moe/v4/anime?q={}{}&limit=5&order_by=popularity&sort=asc",
-                encoded, type_param
-            );
+        let resp = match client
+            .get(&url)
+            .header("Accept", "application/json")
+            .send()
+        {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
 
-            let json: serde_json::Value = match client
-                .get(&url)
-                .header("Accept", "application/json")
-                .send()
-                .and_then(|r| r.json())
-            {
-                Ok(j) => j,
-                Err(_) => continue,
-            };
+        if !resp.status().is_success() { continue; }
 
-            let items = match json["data"].as_array() {
-                Some(a) if !a.is_empty() => a,
-                _ => continue,
-            };
+        let text = match resp.text() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
 
-            // Toma el primer resultado con episodes > 0
-            for item in items {
-                let episodes = item["episodes"].as_u64().unwrap_or(0) as u32;
-                if episodes > 0 {
-                    return Ok((1..=episodes).rev().collect());
+        let arr = match serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|v| v.as_array().cloned())
+        {
+            Some(a) if !a.is_empty() => a,
+            _ => continue,
+        };
+
+        for item in &arr {
+            if let Some(t) = item["title"].as_str() {
+                for cap in re.captures_iter(t) {
+                    if let Ok(n) = cap[1].parse::<u32>() {
+                        if n > max_ep { max_ep = n; }
+                    }
                 }
             }
         }
+
+        // Con el primer query que devuelva resultados ya es suficiente,
+        // porque AnimeToSho ordena por fecha desc y el primer resultado
+        // suele ser el episodio más reciente.
+        if max_ep > 0 { break 'outer; }
     }
 
-    Ok(vec![])
+    if max_ep == 0 {
+        return Ok(vec![]);
+    }
+
+    // Lista secuencial completa — el episodio más reciente primero
+    let result: Vec<u32> = (1..=max_ep).rev().collect();
+    Ok(result)
 }
 
 /// Descarga el .torrent y devuelve la lista de archivos dentro (nombre + tamaño)

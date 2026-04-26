@@ -30,16 +30,15 @@
       let res;
       if (tab === 'nyaa') {
         res = await tauri('nyaa_direct', { query: q.trim() });
-        // Fallback: título sin ':' (e.g. "Jujutsu Kaisen Shimetsu 23")
-        if (res.length === 0 && q.includes(':'))
-          res = await tauri('nyaa_direct', { query: q.replace(/:/g, '').replace(/\s+/g, ' ').trim() });
+        if (res.length === 0 && epPadded != null)
+          res = await tauri('nyaa_direct', { query: animeTitle.trim() });
       } else {
         res = await tauri('nyaa_search', { query: q.trim(), category: '1_2' });
-        if (res.length === 0 && q.includes(':'))
-          res = await tauri('nyaa_search', { query: q.replace(/:/g, '').replace(/\s+/g, ' ').trim(), category: '1_2' });
+        if (res.length === 0 && epPadded != null)
+          res = await tauri('nyaa_search', { query: animeTitle.trim(), category: '1_2' });
       }
       results = res;
-      if (results.length === 0) error = 'Sin resultados. Prueba buscar manualmente, p.ej. "Jujutsu Kaisen S3 23"';
+      if (results.length === 0) error = 'Sin resultados para esta búsqueda.';
     } catch(e) {
       error = String(e);
     } finally {
