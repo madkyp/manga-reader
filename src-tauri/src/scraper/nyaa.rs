@@ -217,87 +217,56 @@ fn parse_rss(xml: &str, base: &str) -> Result<Vec<NyaaResult>, String> {
     Ok(results)
 }
 
-/// Lista los números de episodio disponibles en AnimeToSho para un título de anime.
-/// Consulta AnimeToSho para el título dado, encuentra el episodio más alto publicado
-/// y devuelve la lista secuencial completa 1..=max_ep (más reciente primero).
-/// AnimeToSho ordena por fecha desc, así que los primeros resultados ya tienen el
-/// número más alto y no hace falta paginar todos los episodios históricos.
+/// Lista los episodios disponibles en Nyaa.si para un título de anime.
+/// Usa el RSS de Nyaa.si (rápido, sin Cloudflare) en lugar de AnimeToSho.
+/// Extrae números de episodio de los títulos RSS, encuentra el máximo y devuelve
+/// la lista completa 1..=max_ep (más reciente primero).
 #[tauri::command]
 pub fn nyaa_episode_list(title: String) -> Result<Vec<u32>, String> {
     let client = super::shared_client();
-    // Patrón típico de fansubs: "[SubsPlease] One Piece - 1158 (1080p)"
-    let re = Regex::new(r" - (\d{1,4})(?:[v\s\(\[._-]|$)").unwrap();
-    let mut max_ep: u32 = 0;
+    // Patrón típico de fansubs: "[SubsPlease] Anime - 12 (1080p)" o "- 12v2"
+    let re_ep = Regex::new(r" - (\d{1,4})(?:[v\s\(\[._-]|$)").unwrap();
+    // Regex para extraer el <title> de cada <item> en el RSS
+    let re_title = Regex::new(r"<title>(?:<!\[CDATA\[(.*?)\]\]>|([^<]*))</title>").unwrap();
 
-    // Fallback: título base antes de ':' o '-' (p.ej. "Jujutsu Kaisen: Shimetsu" → "Jujutsu Kaisen")
-    let base_title = title
-        .split(':')
-        .next()
-        .unwrap_or(&title)
-        .trim()
-        .to_string();
-
-    // Variante sin caracteres especiales: "Jujutsu Kaisen: Shimetsu" → "Jujutsu Kaisen Shimetsu"
-    let clean_title = title.replace(':', " ").replace("  ", " ").trim().to_string();
+    // Variantes del título de más específica a más general
+    let base = title.split(':').next().unwrap_or(&title).trim().to_string();
+    let clean = title.replace(':', " ").replace("  ", " ").trim().to_string();
 
     let mut seen = std::collections::HashSet::new();
     let mut queries: Vec<String> = Vec::new();
-    for q in [
-        title.clone(),
-        clean_title,
-        format!("{} 1080p", title),
-        format!("{} 720p", title),
-        base_title.clone(),
-        format!("{} 1080p", base_title),
-        format!("{} 720p", base_title),
-    ] {
+    for q in [title.clone(), clean, base] {
         if seen.insert(q.clone()) { queries.push(q); }
     }
 
+    let mut max_ep: u32 = 0;
+
     'outer: for q in &queries {
         let encoded = urlencoding::encode(q).into_owned();
-        let url = format!(
-            "https://feed.animetosho.org/json?q={}&qx=1",
-            encoded
-        );
+        let url = format!("https://nyaa.si/?page=rss&q={}&c=1_2&f=0", encoded);
 
-        let resp = match client
+        let text = match client
             .get(&url)
-            .header("Accept", "application/json")
+            .header("User-Agent", "Mozilla/5.0 (compatible; RSS reader)")
             .send()
+            .and_then(|r| r.text())
         {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-
-        if !resp.status().is_success() { continue; }
-
-        let text = match resp.text() {
             Ok(t) => t,
             Err(_) => continue,
         };
 
-        let arr = match serde_json::from_str::<serde_json::Value>(&text)
-            .ok()
-            .and_then(|v| v.as_array().cloned())
-        {
-            Some(a) if !a.is_empty() => a,
-            _ => continue,
-        };
-
-        for item in &arr {
-            if let Some(t) = item["title"].as_str() {
-                for cap in re.captures_iter(t) {
-                    if let Ok(n) = cap[1].parse::<u32>() {
-                        if n > max_ep { max_ep = n; }
-                    }
+        // Primer <title> es el canal — saltarlo
+        let mut first = true;
+        for cap in re_title.captures_iter(&text) {
+            if first { first = false; continue; }
+            let t = cap.get(1).or(cap.get(2)).map(|m| m.as_str()).unwrap_or("");
+            for ep_cap in re_ep.captures_iter(t) {
+                if let Ok(n) = ep_cap[1].parse::<u32>() {
+                    if n > max_ep { max_ep = n; }
                 }
             }
         }
 
-        // Con el primer query que devuelva resultados ya es suficiente,
-        // porque AnimeToSho ordena por fecha desc y el primer resultado
-        // suele ser el episodio más reciente.
         if max_ep > 0 { break 'outer; }
     }
 
@@ -305,9 +274,7 @@ pub fn nyaa_episode_list(title: String) -> Result<Vec<u32>, String> {
         return Ok(vec![]);
     }
 
-    // Lista secuencial completa — el episodio más reciente primero
-    let result: Vec<u32> = (1..=max_ep).rev().collect();
-    Ok(result)
+    Ok((1..=max_ep).rev().collect())
 }
 
 /// Descarga el .torrent y devuelve la lista de archivos dentro (nombre + tamaño)
