@@ -217,66 +217,49 @@ fn parse_rss(xml: &str, base: &str) -> Result<Vec<NyaaResult>, String> {
     Ok(results)
 }
 
-/// Obtiene la lista de episodios consultando la API de AniList.
-/// Prueba varias combinaciones de título y formato para maximizar los aciertos.
+/// Obtiene el total de episodios de MyAnimeList via Jikan (API pública, sin autenticación).
+/// Devuelve la lista 1..=total (más reciente primero).
 #[tauri::command]
 pub fn nyaa_episode_list(title: String) -> Result<Vec<u32>, String> {
     let client = super::shared_client();
 
-    // Título base antes de ':' — "Jujutsu Kaisen: Shimetsu" → "Jujutsu Kaisen"
+    // Título base antes de ':' como fallback
     let base = title.split(':').next().unwrap_or(&title).trim().to_string();
+    let mut searches: Vec<String> = vec![title.clone()];
+    if base != title { searches.push(base); }
 
-    // Intentos en orden: primero título exacto, luego base; primero solo TV, luego cualquier formato
-    let mut candidates: Vec<(String, &str)> = vec![
-        (title.clone(),  "TV,TV_SHORT"),
-        (base.clone(),   "TV,TV_SHORT"),
-        (title.clone(),  "TV,TV_SHORT,ONA"),
-        (base.clone(),   "TV,TV_SHORT,ONA"),
-    ];
-    // Deduplicar si base == title
-    if base == title { candidates.retain(|(_, fmt)| *fmt == "TV,TV_SHORT"); }
+    for search in &searches {
+        let encoded = urlencoding::encode(search).into_owned();
 
-    for (search, _fmt) in &candidates {
-        // airingSchedule(notYetAired:false) como tercer fallback:
-        // cubre anime terminados donde episodes=null y nextAiringEpisode=null
-        let gql = format!(
-            "query($s:String){{Media(search:$s,type:ANIME,format_in:[{}]){{episodes nextAiringEpisode{{episode}} airingSchedule(notYetAired:false,sort:[EPISODE_DESC]){{nodes{{episode}}}}}}}}",
-            _fmt
-        );
-        let body = serde_json::json!({ "query": gql, "variables": { "s": search } });
+        // Primero intenta solo series TV; si no hay episodios, intenta sin filtro
+        for type_param in &["&type=tv", ""] {
+            let url = format!(
+                "https://api.jikan.moe/v4/anime?q={}{}&limit=5&order_by=popularity&sort=asc",
+                encoded, type_param
+            );
 
-        let json: serde_json::Value = match client
-            .post("https://graphql.anilist.co")
-            .header("Content-Type", "application/json")
-            .header("Accept", "application/json")
-            .json(&body)
-            .send()
-            .and_then(|r| r.json())
-        {
-            Ok(j) => j,
-            Err(_) => continue,
-        };
+            let json: serde_json::Value = match client
+                .get(&url)
+                .header("Accept", "application/json")
+                .send()
+                .and_then(|r| r.json())
+            {
+                Ok(j) => j,
+                Err(_) => continue,
+            };
 
-        let media = &json["data"]["Media"];
-        if media.is_null() { continue; }
+            let items = match json["data"].as_array() {
+                Some(a) if !a.is_empty() => a,
+                _ => continue,
+            };
 
-        let total = media["episodes"].as_u64().unwrap_or(0) as u32;
-
-        let aired = media["nextAiringEpisode"]["episode"]
-            .as_u64()
-            .map(|n| (n as u32).saturating_sub(1))
-            .unwrap_or(0);
-
-        // Último episodio emitido según el calendario (para series terminadas sin episodes conocido)
-        let last_scheduled = media["airingSchedule"]["nodes"]
-            .as_array()
-            .and_then(|a| a.first())
-            .and_then(|n| n["episode"].as_u64())
-            .unwrap_or(0) as u32;
-
-        let count = if total > 0 { total } else if aired > 0 { aired } else { last_scheduled };
-        if count > 0 {
-            return Ok((1..=count).rev().collect());
+            // Toma el primer resultado con episodes > 0
+            for item in items {
+                let episodes = item["episodes"].as_u64().unwrap_or(0) as u32;
+                if episodes > 0 {
+                    return Ok((1..=episodes).rev().collect());
+                }
+            }
         }
     }
 
