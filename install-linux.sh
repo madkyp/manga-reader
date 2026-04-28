@@ -16,9 +16,31 @@ APP_ID="thefoundry-app"
 APP_NAME="The Foundry App"
 APP_COMMENT="Lector de manga y reproductor de anime via torrents"
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN_SRC="$REPO_DIR/src-tauri/target/release/app"
-ICON_DIR="$REPO_DIR/src-tauri/icons"
+REPO_URL="https://github.com/madkyp/manga-reader.git"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Localizar el repo: dir del script → $HOME/manga-reader → clonar a ~/.cache
+locate_repo() {
+    for cand in "$SCRIPT_DIR" "$HOME/manga-reader" "$PWD"; do
+        if [[ -f "$cand/package.json" && -d "$cand/src-tauri" ]]; then
+            echo "$cand"; return 0
+        fi
+    done
+    # No existe localmente: clonar
+    local clone_dir="$HOME/.cache/thefoundry-app-src"
+    if [[ ! -d "$clone_dir/.git" ]]; then
+        info "Clonando código fuente en $clone_dir..." >&2
+        command -v git >/dev/null 2>&1 || die "git no está instalado; ejecuta primero la instalación de deps o instala git manualmente"
+        git clone --depth 1 "$REPO_URL" "$clone_dir" >&2
+    else
+        info "Actualizando código fuente en $clone_dir..." >&2
+        git -C "$clone_dir" pull --ff-only >&2 || true
+    fi
+    echo "$clone_dir"
+}
+
+# REPO_DIR se establece en main() tras instalar deps (necesita git)
+REPO_DIR=""
 
 INSTALL_BIN="$HOME/.local/bin/$APP_ID"
 INSTALL_DESKTOP="$HOME/.local/share/applications/$APP_ID.desktop"
@@ -159,29 +181,34 @@ ensure_node() {
 # ── Build ────────────────────────────────────────────────────────────────────
 build_app() {
     cd "$REPO_DIR"
+    info "Repo: $REPO_DIR"
     info "Instalando deps de npm (puede tardar)..."
     npm ci 2>/dev/null || npm install
     info "Compilando la app en modo release (esto tarda varios minutos)..."
     # --bundles none: no genera AppImage/deb/rpm — solo el binario suelto
     npm run tauri build -- --bundles none
-    [[ -x "$BIN_SRC" ]] || die "No se encontró el binario en $BIN_SRC tras compilar"
+    local bin="$REPO_DIR/src-tauri/target/release/app"
+    [[ -x "$bin" ]] || die "No se encontró el binario en $bin tras compilar"
     ok "Compilación completada"
 }
 
 # ── Instalación de archivos ──────────────────────────────────────────────────
 install_files() {
+    local bin_src="$REPO_DIR/src-tauri/target/release/app"
+    local icon_dir="$REPO_DIR/src-tauri/icons"
+
     info "Instalando binario en $INSTALL_BIN"
     mkdir -p "$(dirname "$INSTALL_BIN")"
-    install -m 0755 "$BIN_SRC" "$INSTALL_BIN"
+    install -m 0755 "$bin_src" "$INSTALL_BIN"
 
     info "Instalando iconos en $INSTALL_ICONS"
     for size in 32 64 128 256; do
         local src
         case $size in
-            32)  src="$ICON_DIR/32x32.png" ;;
-            64)  src="$ICON_DIR/64x64.png" ;;
-            128) src="$ICON_DIR/128x128.png" ;;
-            256) src="$ICON_DIR/128x128@2x.png" ;;
+            32)  src="$icon_dir/32x32.png" ;;
+            64)  src="$icon_dir/64x64.png" ;;
+            128) src="$icon_dir/128x128.png" ;;
+            256) src="$icon_dir/128x128@2x.png" ;;
         esac
         if [[ -f "$src" ]]; then
             local dst="$INSTALL_ICONS/${size}x${size}/apps/$APP_ID.png"
@@ -245,6 +272,7 @@ case "${1:-install}" in
         install_deps
         ensure_rust
         ensure_node
+        REPO_DIR="$(locate_repo)"
         build_app
         install_files
         echo
