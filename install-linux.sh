@@ -184,9 +184,13 @@ build_app() {
     info "Repo: $REPO_DIR"
     info "Instalando deps de npm (puede tardar)..."
     npm ci 2>/dev/null || npm install
-    info "Compilando la app en modo release (esto tarda varios minutos)..."
-    # --bundles none: no genera AppImage/deb/rpm — solo el binario suelto
-    npm run tauri build -- --bundles none
+    info "Compilando frontend (vite)..."
+    npm run build
+    info "Compilando binario en modo release (varios minutos)..."
+    # En Tauri v2 no existe --bundles none. Compilamos solo el binario
+    # con cargo y el feature custom-protocol, sin generar deb/rpm/AppImage.
+    cargo build --release --features custom-protocol \
+        --manifest-path "$REPO_DIR/src-tauri/Cargo.toml"
     local bin="$REPO_DIR/src-tauri/target/release/app"
     [[ -x "$bin" ]] || die "No se encontró el binario en $bin tras compilar"
     ok "Compilación completada"
