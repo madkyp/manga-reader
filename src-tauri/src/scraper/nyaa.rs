@@ -217,26 +217,89 @@ fn parse_rss(xml: &str, base: &str) -> Result<Vec<NyaaResult>, String> {
     Ok(results)
 }
 
-/// Lista los números de episodio disponibles en AnimeToSho para un título de anime.
-/// Consulta AnimeToSho para el título dado, encuentra el episodio más alto publicado
-/// y devuelve la lista secuencial completa 1..=max_ep (más reciente primero).
-/// AnimeToSho ordena por fecha desc, así que los primeros resultados ya tienen el
-/// número más alto y no hace falta paginar todos los episodios históricos.
-#[tauri::command]
-pub fn nyaa_episode_list(title: String) -> Result<Vec<u32>, String> {
-    let client = super::shared_client();
-    // " - 12 " (SubsPlease) o "S03E12" (la mayoría de fansubs)
-    let re = Regex::new(r"(?i)(?:(?: - )(\d{1,4})(?:[v\s\(\[._-]|$)|[Ss]\d{1,2}[Ee](\d{1,4}))").unwrap();
-    let mut max_ep: u32 = 0;
+/// Grupo de episodios por temporada devuelto por nyaa_episode_list.
+/// season = 0 indica numeración absoluta (sin información de temporada).
+#[derive(Serialize, Clone)]
+pub struct EpisodeGroup {
+    pub season:   u32,
+    pub episodes: Vec<u32>,  // desc order, numeración relativa a la temporada
+}
 
-    // Si el título tiene subtítulo largo ("Shimetsu Kaiyū Zenpen"), añadir query
-    // con solo la primera palabra del subtítulo ("Jujutsu Kaisen Shimetsu")
+// ── Caché de nyaa_episode_list ────────────────────────────────────────────────
+
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+static EPISODE_CACHE: OnceLock<Mutex<std::collections::HashMap<String, (Instant, Vec<EpisodeGroup>)>>> = OnceLock::new();
+const EPISODE_TTL: Duration = Duration::from_secs(600); // 10 minutos
+
+fn episode_cache() -> &'static Mutex<std::collections::HashMap<String, (Instant, Vec<EpisodeGroup>)>> {
+    EPISODE_CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+// Lanza una query a AnimeToSho y devuelve (season_map, abs_max).
+fn fetch_ats_query(q: &str, re_sea: &Regex, re_abs: &Regex) -> (std::collections::HashMap<u32, u32>, u32) {
+    use std::collections::HashMap;
+    let client  = super::shared_client();
+    let encoded = urlencoding::encode(q).into_owned();
+    let url     = format!("https://feed.animetosho.org/json?q={}&qx=1", encoded);
+
+    let resp = match client.get(&url).header("Accept", "application/json").send() {
+        Ok(r) if r.status().is_success() => r,
+        _ => return (HashMap::new(), 0),
+    };
+    let text = match resp.text() { Ok(t) => t, Err(_) => return (HashMap::new(), 0) };
+    let arr  = match serde_json::from_str::<serde_json::Value>(&text)
+        .ok().and_then(|v| v.as_array().cloned())
+    {
+        Some(a) if !a.is_empty() => a, _ => return (HashMap::new(), 0),
+    };
+
+    let mut sea: HashMap<u32, u32> = HashMap::new();
+    let mut abs: u32 = 0;
+    for item in &arr {
+        if let Some(t) = item["title"].as_str() {
+            for cap in re_sea.captures_iter(t) {
+                let s: u32 = cap[1].parse().unwrap_or(0);
+                let e: u32 = cap[2].parse().unwrap_or(0);
+                if s > 0 && e > 0 { let m = sea.entry(s).or_insert(0); if e > *m { *m = e; } }
+            }
+            for cap in re_abs.captures_iter(t) {
+                let n: u32 = cap[1].parse().unwrap_or(0);
+                if n > abs { abs = n; }
+            }
+        }
+    }
+    (sea, abs)
+}
+
+/// Lista episodios disponibles en AnimeToSho agrupados por temporada.
+/// Todas las queries se lanzan en paralelo; se usa el resultado de mayor
+/// prioridad que devuelva datos. Caché de 10 min por título.
+#[tauri::command]
+pub fn nyaa_episode_list(title: String) -> Result<Vec<EpisodeGroup>, String> {
+    use std::collections::HashMap;
+
+    // ── Caché ─────────────────────────────────────────────────────────────────
+    {
+        let cache = episode_cache().lock().unwrap();
+        if let Some((ts, groups)) = cache.get(&title) {
+            if ts.elapsed() < EPISODE_TTL {
+                return Ok(groups.clone());
+            }
+        }
+    }
+
+    let re_sea = Regex::new(r"(?i)[Ss](\d{1,2})[Ee](\d{1,4})").unwrap();
+    let re_abs = Regex::new(r" - (\d{1,4})(?:[v\s\(\[._-]|$)").unwrap();
+
+    // Queries en orden de prioridad
     let short_sub: Option<String> = if title.contains(':') {
         let sub = title.splitn(2, ':').nth(1).unwrap_or("").trim().to_string();
-        let first_word = sub.split_whitespace().next().unwrap_or("").to_string();
         let base = title.splitn(2, ':').next().unwrap_or("").trim().to_string();
-        if !first_word.is_empty() && sub.split_whitespace().count() > 1 {
-            Some(format!("{} {}", base, first_word))
+        let fw  = sub.split_whitespace().next().unwrap_or("").to_string();
+        if !fw.is_empty() && sub.split_whitespace().count() > 1 {
+            Some(format!("{} {}", base, fw))
         } else { None }
     } else { None };
 
@@ -245,68 +308,54 @@ pub fn nyaa_episode_list(title: String) -> Result<Vec<u32>, String> {
         format!("{} 1080p", title),
         format!("{} 720p", title),
     ];
-    if let Some(s) = short_sub {
-        queries.push(s.clone());
-        queries.push(format!("{} 1080p", s));
+    if let Some(ref s) = short_sub { queries.push(s.clone()); queries.push(format!("{} 1080p", s)); }
+    if title.contains(':') {
+        let base = title.splitn(2, ':').next().unwrap_or("").trim().to_string();
+        queries.push(base.clone());
+        queries.push(format!("{} 1080p", base));
     }
 
-    'outer: for q in &queries {
-        let encoded = urlencoding::encode(q).into_owned();
-        let url = format!(
-            "https://feed.animetosho.org/json?q={}&qx=1",
-            encoded
-        );
+    // ── Todas las queries en paralelo ─────────────────────────────────────────
+    let results: Vec<(HashMap<u32, u32>, u32)> = std::thread::scope(|s| {
+        queries.iter()
+            .map(|q| s.spawn(|| fetch_ats_query(q, &re_sea, &re_abs)))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().unwrap_or((HashMap::new(), 0)))
+            .collect()
+    });
 
-        let resp = match client
-            .get(&url)
-            .header("Accept", "application/json")
-            .send()
-        {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-
-        if !resp.status().is_success() { continue; }
-
-        let text = match resp.text() {
-            Ok(t) => t,
-            Err(_) => continue,
-        };
-
-        let arr = match serde_json::from_str::<serde_json::Value>(&text)
-            .ok()
-            .and_then(|v| v.as_array().cloned())
-        {
-            Some(a) if !a.is_empty() => a,
-            _ => continue,
-        };
-
-        for item in &arr {
-            if let Some(t) = item["title"].as_str() {
-                for cap in re.captures_iter(t) {
-                    // grupo 1: " - 12", grupo 2: S03E12
-                    let n_str = cap.get(1).or_else(|| cap.get(2))
-                        .map(|m| m.as_str());
-                    if let Some(Ok(n)) = n_str.map(|s| s.parse::<u32>()) {
-                        if n > max_ep { max_ep = n; }
-                    }
-                }
-            }
+    // Prioridad: primer resultado (por orden de query) con season_max;
+    // si ninguno tiene, primer resultado con abs_max.
+    let mut season_max: HashMap<u32, u32> = HashMap::new();
+    let mut abs_max: u32 = 0;
+    for (sea, abs) in results {
+        if !sea.is_empty() && season_max.is_empty() {
+            season_max = sea;
+            break;
         }
-
-        // Con el primer query que devuelva resultados ya es suficiente,
-        // porque AnimeToSho ordena por fecha desc y el primer resultado
-        // suele ser el episodio más reciente.
-        if max_ep > 0 { break 'outer; }
+        if abs > 0 && abs_max == 0 { abs_max = abs; }
     }
 
-    if max_ep == 0 {
-        return Ok(vec![]);
+    let groups = if !season_max.is_empty() {
+        let mut g: Vec<EpisodeGroup> = season_max.iter()
+            .map(|(&s, &max)| EpisodeGroup { season: s, episodes: (1..=max).rev().collect() })
+            .collect();
+        g.sort_by_key(|g| g.season);
+        g
+    } else if abs_max > 0 {
+        vec![EpisodeGroup { season: 0, episodes: (1..=abs_max).rev().collect() }]
+    } else {
+        vec![]
+    };
+
+    // ── Guardar en caché ──────────────────────────────────────────────────────
+    if !groups.is_empty() {
+        let mut cache = episode_cache().lock().unwrap();
+        cache.insert(title, (Instant::now(), groups.clone()));
     }
 
-    // Lista secuencial completa — el episodio más reciente primero
-    let result: Vec<u32> = (1..=max_ep).rev().collect();
-    Ok(result)
+    Ok(groups)
 }
 
 /// Descarga el .torrent y devuelve la lista de archivos dentro (nombre + tamaño)

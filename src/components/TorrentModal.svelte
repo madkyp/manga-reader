@@ -1,10 +1,9 @@
 <script>
-  let { animeTitle = '', episodeNumber = null, onClose, onSelect } = $props();
+  import { invoke } from '@tauri-apps/api/core';
 
-  async function tauri(cmd, args = {}) {
-    const { invoke } = await import('@tauri-apps/api/core');
-    return invoke(cmd, args);
-  }
+  let { animeTitle = '', episodeNumber = null, episodeSeason = null, onClose, onSelect } = $props();
+
+  function tauri(cmd, args = {}) { return invoke(cmd, args); }
 
   let results      = $state([]);
   let loading      = $state(true);
@@ -18,7 +17,19 @@
   const epPadded = epStr != null
     ? epStr.padStart(epStr.length <= 2 ? 2 : epStr.length <= 3 ? 3 : 4, '0')
     : null;
-  const autoQuery = epPadded != null ? `${animeTitle} ${epPadded}` : animeTitle;
+
+  // Si conocemos la temporada (≥ 1), usar S##E## con el título base para que
+  // la búsqueda sea específica: "Jujutsu Kaisen S01E01", "Jujutsu Kaisen S03E12".
+  // Si la temporada es desconocida pero el título tiene subtítulo (':', ej. "Shimetsu"),
+  // usar igualmente el título base para evitar queries con unicode/colons que dan 0 resultados.
+  const baseTitle = animeTitle.includes(':') ? animeTitle.split(':')[0].trim() : animeTitle;
+  const seaStr = (episodeSeason != null && episodeSeason > 0)
+    ? `S${String(episodeSeason).padStart(2,'0')}E${epPadded}`
+    : null;
+  const queryTitle = seaStr == null && animeTitle.includes(':') ? baseTitle : animeTitle;
+  const autoQuery = seaStr != null
+    ? `${baseTitle} ${seaStr}`
+    : epPadded != null ? `${queryTitle} ${epPadded}` : queryTitle;
 
   let manualQuery = $state(autoQuery);
 
@@ -28,14 +39,31 @@
     loading = true; error = ''; results = []; selected = null; fileInfo = null;
     try {
       let res;
+      const baseTitle = animeTitle.includes(':') ? animeTitle.split(':')[0].trim() : null;
       if (tab === 'nyaa') {
         res = await tauri('nyaa_direct', { query: q.trim() });
         if (res.length === 0 && epPadded != null)
           res = await tauri('nyaa_direct', { query: animeTitle.trim() });
+        if (res.length === 0 && baseTitle) {
+          res = await tauri('nyaa_direct', { query: epPadded ? `${baseTitle} ${epPadded}` : baseTitle });
+          if (res.length === 0)
+            res = await tauri('nyaa_direct', { query: baseTitle });
+        }
       } else {
         res = await tauri('nyaa_search', { query: q.trim(), category: '1_2' });
         if (res.length === 0 && epPadded != null)
           res = await tauri('nyaa_search', { query: animeTitle.trim(), category: '1_2' });
+        if (res.length === 0 && baseTitle) {
+          res = await tauri('nyaa_search', { query: epPadded ? `${baseTitle} ${epPadded}` : baseTitle, category: '1_2' });
+          if (res.length === 0)
+            res = await tauri('nyaa_search', { query: baseTitle, category: '1_2' });
+        }
+      }
+      // Si hay episodio, filtrar para excluir resultados donde el número
+      // aparece solo en hashes hexadecimales, no como número de episodio.
+      if (epPadded != null && res.length > 0) {
+        const filtered = res.filter(r => episodeMatches(r.title, epPadded, episodeSeason));
+        if (filtered.length > 0) res = filtered;
       }
       results = res;
       if (results.length === 0) error = 'Sin resultados para esta búsqueda.';
@@ -67,6 +95,42 @@
 
   function chooseFile(f) { onSelect({ torrent: selected, file: f }); onClose(); }
   function chooseDirectly() { onSelect({ torrent: selected, file: null }); onClose(); }
+
+  function episodeMatches(title, ep, season) {
+    const n = parseInt(ep, 10);
+
+    if (season != null && season > 1) {
+      // Temporada > 1: solo coincide con S##E## de esa temporada exacta
+      return new RegExp(`[Ss]0?${season}[Ee]0?${n}(?:\\D|$)`).test(title);
+    }
+    if (season === 1) {
+      // Rechazar S02+, "2nd Season", "Season 2", etc.
+      const isHigherSeason =
+        /[Ss]0?[2-9]\d*[Ee]/i.test(title) ||
+        /\b[2-9](?:nd|rd|th)\s+season\b/i.test(title) ||
+        /\bseason\s+[2-9]\b/i.test(title);
+      if (isHigherSeason) return false;
+
+      // Rechazar si el título tiene ": Subtítulo" indicando otro arco
+      // (ej. "Jujutsu Kaisen: Shimetsu - 01"), pero solo cuando lo que
+      // buscamos no tiene dos puntos (si buscásemos "X: Arco" no filtramos).
+      if (!animeTitle.includes(':')) {
+        const esc = animeTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const bare = title.replace(/^\[[^\]]+\]\s*/, ''); // quitar [Grupo] al inicio
+        if (new RegExp(`^${esc}\\s*:`, 'i').test(bare)) return false;
+      }
+
+      return (
+        new RegExp(`- 0?${n}(?:[v\\s\\[\\(._]|$)`, 'i').test(title) ||
+        new RegExp(`[Ss]01[Ee]0?${n}(?:\\D|$)`).test(title)
+      );
+    }
+    // Sin info de temporada (season 0 o null): comportamiento original
+    return (
+      new RegExp(`- 0?${n}(?:[v\\s\\[\\(._]|$)`, 'i').test(title) ||
+      new RegExp(`[Ee]0?${n}(?:\\D|$)`).test(title)
+    );
+  }
 
   function formatSize(bytes) {
     if (!bytes) return '';

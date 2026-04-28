@@ -38,12 +38,19 @@ pub struct KitsuListResult {
     pub total:    u64,
 }
 
-// ── Helper HTTP ───────────────────────────────────────────────────────────────
+// ── Helper HTTP + caché ───────────────────────────────────────────────────────
+
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+static KITSU_CACHE: OnceLock<Mutex<std::collections::HashMap<String, (Instant, serde_json::Value)>>> = OnceLock::new();
+const KITSU_TTL: Duration = Duration::from_secs(300); // 5 minutos
+
+fn kitsu_cache() -> &'static Mutex<std::collections::HashMap<String, (Instant, serde_json::Value)>> {
+    KITSU_CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
 
 fn kitsu_get(raw_url: &str) -> Result<serde_json::Value, String> {
-    // Construimos reqwest::Url directamente para que los brackets literales
-    // no sean re-codificados por el parser estricto de url::Url.
-    // reqwest acepta &str para .get() y lo parsea con leniencia necesaria.
     let client = super::shared_client();
     let resp = client
         .get(raw_url)
@@ -60,6 +67,20 @@ fn kitsu_get(raw_url: &str) -> Result<serde_json::Value, String> {
 
     serde_json::from_str(&text)
         .map_err(|e| format!("JSON Kitsu: {} — cuerpo: {}", e, &text[..text.len().min(200)]))
+}
+
+// Versión cacheada: sirve la respuesta anterior si tiene menos de 5 min.
+fn kitsu_get_cached(raw_url: &str) -> Result<serde_json::Value, String> {
+    let key = raw_url.to_string();
+    {
+        let cache = kitsu_cache().lock().unwrap();
+        if let Some((ts, val)) = cache.get(&key) {
+            if ts.elapsed() < KITSU_TTL { return Ok(val.clone()); }
+        }
+    }
+    let val = kitsu_get(raw_url)?;
+    kitsu_cache().lock().unwrap().insert(key, (Instant::now(), val.clone()));
+    Ok(val)
 }
 
 // ── Parse ────────────────────────────────────────────────────────────────────
@@ -124,7 +145,7 @@ pub fn kitsu_browse(sort: Option<String>, page: Option<u32>) -> Result<String, S
         "{}/anime?sort={}&page[limit]={}&page[offset]={}&fields[anime]=canonicalTitle,titles,posterImage,coverImage,subtype,showType,status,episodeCount,averageRating,startDate,synopsis",
         BASE, sort_param, limit, offset
     );
-    let json = kitsu_get(&url)?;
+    let json = kitsu_get_cached(&url)?;
 
     let data = json.get("data").and_then(|d| d.as_array())
         .ok_or("Sin data en browse")?;
@@ -140,7 +161,7 @@ pub fn kitsu_browse(sort: Option<String>, page: Option<u32>) -> Result<String, S
 #[tauri::command]
 pub fn kitsu_trending() -> Result<String, String> {
     let url  = format!("{}/trending/anime?limit=20", BASE);
-    let json = kitsu_get(&url)?;
+    let json = kitsu_get_cached(&url)?;
     let data = json.get("data").and_then(|d| d.as_array()).ok_or("Sin data en trending")?;
     let items: Vec<KitsuAnime> = data.iter().filter_map(parse_anime).collect();
     serde_json::to_string(&KitsuListResult {
@@ -156,7 +177,7 @@ pub fn kitsu_search(query: String) -> Result<String, String> {
         BASE,
         urlencoding::encode(&query)
     );
-    let json = kitsu_get(&url)?;
+    let json = kitsu_get_cached(&url)?;
     let data = json.get("data").and_then(|d| d.as_array()).ok_or("Sin resultados")?;
     let items: Vec<KitsuAnime> = data.iter().filter_map(parse_anime).collect();
     serde_json::to_string(&KitsuListResult {
@@ -170,7 +191,7 @@ pub fn kitsu_detail(id: String) -> Result<String, String> {
         "{}/anime/{}?include=genres&fields[anime]=canonicalTitle,titles,posterImage,coverImage,subtype,showType,status,episodeCount,averageRating,startDate,endDate,synopsis",
         BASE, id
     );
-    let json = kitsu_get(&url)?;
+    let json = kitsu_get_cached(&url)?;
 
     let item = json.get("data").ok_or("Sin datos de detalle")?;
     let mut anime = parse_anime(item).ok_or("No se pudo parsear el anime")?;

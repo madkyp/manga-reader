@@ -1,10 +1,8 @@
 import { writable, derived, get } from 'svelte/store';
+import { invoke } from '@tauri-apps/api/core';
 import { currentView } from './manga.js';
 
-async function inv(cmd, args) {
-    const { invoke } = await import('@tauri-apps/api/core');
-    return invoke(cmd, args);
-}
+function inv(cmd, args) { return invoke(cmd, args ?? {}); }
 
 // ── Biblioteca anime ──────────────────────────────────────────────────────────
 function loadAnimeLibrary() {

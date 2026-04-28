@@ -1,13 +1,11 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
+  import { invoke } from '@tauri-apps/api/core';
   import { animeLibrary, toggleAnimeLibrary, pendingAnime } from '../stores/anime.js';
   import TorrentModal from './TorrentModal.svelte';
   import MpvPlayer from './MpvPlayer.svelte';
 
-  async function tauri(cmd, args) {
-    const { invoke } = await import('@tauri-apps/api/core');
-    return invoke(cmd, args);
-  }
+  function tauri(cmd, args) { return invoke(cmd, args ?? {}); }
 
   // ── Estado global de la vista ─────────────────────────────────────────────
   let subView  = $state('browse'); // 'browse' | 'detail' | 'player'
@@ -164,12 +162,12 @@
   }
   function markAllWatched() {
     const id = detail?.id; if (!id) return;
-    watchedSet = new Set((detail?.episodes ?? []).map(e => e.id));
+    watchedSet = new Set((detail?.episodes ?? []).filter(e => !e.isSeasonHeader).map(e => e.id));
     saveWatched(id, watchedSet);
   }
   let allWatched = $derived(
-    (detail?.episodes?.length ?? 0) > 0 &&
-    (detail?.episodes ?? []).every(e => watchedSet.has(e.id))
+    (detail?.episodes?.filter(e => !e.isSeasonHeader).length ?? 0) > 0 &&
+    (detail?.episodes ?? []).filter(e => !e.isSeasonHeader).every(e => watchedSet.has(e.id))
   );
 
   // fuente guardada al abrir detalle (para saber si los eps son kitsu o flv)
@@ -215,10 +213,17 @@
 
       let episodes = [];
       if (episodesResult.status === 'fulfilled') {
-        // nyaa_episode_list devuelve Vec<u32> serializado como array JS, ya ordenado desc
-        episodes = episodesResult.value.map(n => ({
-          id: `nyaa-${n}`, number: n, title: null, airdate: null, thumbnail: null
-        }));
+        // nyaa_episode_list devuelve Vec<EpisodeGroup> [{season, episodes:[]}]
+        const groups = episodesResult.value;
+        const multiSeason = groups.length > 1;
+        for (const g of groups) {
+          if (multiSeason && g.season > 0) {
+            episodes.push({ id: `season-hdr-${g.season}`, isSeasonHeader: true, season: g.season });
+          }
+          for (const n of g.episodes) {
+            episodes.push({ id: `nyaa-s${g.season}-${n}`, number: n, season: g.season > 0 ? g.season : null, title: null, airdate: null, thumbnail: null });
+          }
+        }
       }
 
       detail = { ...base, episodes };
@@ -233,7 +238,7 @@
     // Kitsu: no tiene streams propios → abrir TorrentModal directamente
     if (detailSource === 'kitsu') {
       markWatched(ep.id);
-      torrentModal = { animeTitle: detail?.title ?? '', episodeNumber: ep.number };
+      torrentModal = { animeTitle: detail?.title ?? '', episodeNumber: ep.number, episodeSeason: ep.season };
       return;
     }
 
@@ -855,7 +860,7 @@
       <div class="eps-section">
         <h2 class="eps-title">
           Episodios
-          {#if detail.episodes?.length}<span class="eps-count">{detail.episodes.length}</span>{/if}
+          {#if detail.episodes?.length}<span class="eps-count">{detail.episodes.filter(e => !e.isSeasonHeader).length}</span>{/if}
           {#if loading}<span class="eps-loading"><div class="spinner-sm"></div></span>{/if}
           <button class="watch-all-btn" class:all-watched={allWatched} onclick={markAllWatched} title="Marcar todos como vistos">
             <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 10 8 14 16 6"/></svg>
@@ -867,41 +872,45 @@
         {:else}
           <div class="eps-list">
             {#each detail.episodes as ep}
-              <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-              <div class="ep-row" class:is-watched={watchedSet.has(ep.id)} onclick={() => openEpisode(ep)}>
-                <span class="ep-num">
-                  Ep. {ep.number}
-                  {#if watchedSet.has(ep.id)}<span class="watched-tag">Visto</span>{/if}
-                </span>
-                {#if ep.title}
-                  <span class="ep-title-text">{ep.title}</span>
-                {/if}
-                {#if epDates[ep.number]}
-                  <span class="ep-date">{epDates[ep.number]}</span>
-                {:else if ep.airdate}
-                  <span class="ep-date">{ep.airdate}</span>
-                {/if}
-                {#if ep.length_min}
-                  <span class="ep-dur">{ep.length_min}min</span>
-                {/if}
+              {#if ep.isSeasonHeader}
+                <div class="season-header">Temporada {ep.season}</div>
+              {:else}
                 <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-                <span class="ep-torrent-btn" title="Buscar torrent en Nyaa.si"
-                  onclick={(e) => { e.stopPropagation(); torrentModal = { animeTitle: detail?.title ?? '', episodeNumber: ep.number }; }}>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                    <polyline points="8 17 12 21 16 17"/><line x1="12" y1="3" x2="12" y2="21"/>
-                    <polyline points="20 7 12 3 4 7"/>
-                  </svg>
-                  Torrent
-                </span>
-                {#if detailSource === 'kitsu'}
-                  <svg class="ep-play kitsu-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                    <polyline points="8 17 12 21 16 17"/><line x1="12" y1="3" x2="12" y2="21"/>
-                    <polyline points="20 7 12 3 4 7"/>
-                  </svg>
-                {:else}
-                  <svg class="ep-play" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                {/if}
-              </div>
+                <div class="ep-row" class:is-watched={watchedSet.has(ep.id)} onclick={() => openEpisode(ep)}>
+                  <span class="ep-num">
+                    Ep. {ep.number}
+                    {#if watchedSet.has(ep.id)}<span class="watched-tag">Visto</span>{/if}
+                  </span>
+                  {#if ep.title}
+                    <span class="ep-title-text">{ep.title}</span>
+                  {/if}
+                  {#if epDates[ep.number]}
+                    <span class="ep-date">{epDates[ep.number]}</span>
+                  {:else if ep.airdate}
+                    <span class="ep-date">{ep.airdate}</span>
+                  {/if}
+                  {#if ep.length_min}
+                    <span class="ep-dur">{ep.length_min}min</span>
+                  {/if}
+                  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+                  <span class="ep-torrent-btn" title="Buscar torrent en Nyaa.si"
+                    onclick={(e) => { e.stopPropagation(); torrentModal = { animeTitle: detail?.title ?? '', episodeNumber: ep.number, episodeSeason: ep.season }; }}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                      <polyline points="8 17 12 21 16 17"/><line x1="12" y1="3" x2="12" y2="21"/>
+                      <polyline points="20 7 12 3 4 7"/>
+                    </svg>
+                    Torrent
+                  </span>
+                  {#if detailSource === 'kitsu'}
+                    <svg class="ep-play kitsu-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                      <polyline points="8 17 12 21 16 17"/><line x1="12" y1="3" x2="12" y2="21"/>
+                      <polyline points="20 7 12 3 4 7"/>
+                    </svg>
+                  {:else}
+                    <svg class="ep-play" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                  {/if}
+                </div>
+              {/if}
             {/each}
           </div>
           {#if kitsuEpsMore && detailSource === 'kitsu'}
@@ -1398,6 +1407,18 @@
     flex-direction: column;
     gap: 2px;
   }
+
+  .season-header {
+    padding: 10px 12px 4px;
+    font-size: 10px;
+    font-weight: 800;
+    color: var(--primary, #f59e0b);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    border-top: 1px solid var(--outline-dim);
+    margin-top: 6px;
+  }
+  .season-header:first-child { border-top: none; margin-top: 0; }
 
   .ep-row {
     display: flex;
