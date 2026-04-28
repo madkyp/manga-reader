@@ -101,8 +101,20 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--hidden"]),
+        ))
         .setup(|app| {
+            // Si la app fue lanzada por autostart (con --hidden), ocultar la
+            // ventana — queda accesible desde el icono de la bandeja del sistema.
+            let started_hidden = std::env::args().any(|a| a == "--hidden");
+            if started_hidden {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.hide();
+                }
+            }
+
             // Guardar el resource_dir real para que ff_bin() / mpv_bin() encuentren los binarios
             if let Ok(dir) = app.path().resource_dir() {
                 eprintln!("[setup] resource_dir = {}", dir.display());
