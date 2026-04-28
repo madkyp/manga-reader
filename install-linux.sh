@@ -13,7 +13,7 @@ set -euo pipefail
 
 # ── Configuración ────────────────────────────────────────────────────────────
 APP_ID="thefoundry-app"
-APP_NAME="The Foundry App"
+APP_NAME="TheFoundry App"
 APP_COMMENT="Lector de manga y reproductor de anime via torrents"
 
 REPO_URL="https://github.com/madkyp/manga-reader.git"
@@ -153,7 +153,14 @@ install_deps() {
 # ── Rust ─────────────────────────────────────────────────────────────────────
 ensure_rust() {
     if command -v cargo >/dev/null 2>&1; then
-        ok "Rust ya instalado ($(cargo --version))"
+        local rust_ver
+        rust_ver="$(cargo --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
+        local major minor patch req_minor=77
+        IFS='.' read -r major minor patch <<< "$rust_ver"
+        if (( major < 1 || (major == 1 && minor < req_minor) )); then
+            die "Rust $rust_ver es demasiado viejo (se requiere ≥1.$req_minor.0). Actualiza con: rustup update stable"
+        fi
+        ok "Rust OK ($rust_ver)"
         return
     fi
     info "Rust no encontrado; instalando con rustup..."
@@ -206,9 +213,10 @@ install_files() {
     install -m 0755 "$bin_src" "$INSTALL_BIN"
 
     info "Instalando iconos en $INSTALL_ICONS"
-    for size in 32 64 128 256; do
+    for size in 16 32 64 128 256; do
         local src
         case $size in
+            16)  src="$icon_dir/16x16.png" ;;
             32)  src="$icon_dir/32x32.png" ;;
             64)  src="$icon_dir/64x64.png" ;;
             128) src="$icon_dir/128x128.png" ;;
@@ -235,7 +243,7 @@ Icon=$APP_ID
 Terminal=false
 Categories=AudioVideo;Video;Network;
 StartupNotify=true
-StartupWMClass=The Foundry APP
+StartupWMClass=TheFoundry App
 EOF
     chmod 0644 "$INSTALL_DESKTOP"
 

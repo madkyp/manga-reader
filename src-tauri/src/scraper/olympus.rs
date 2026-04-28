@@ -339,15 +339,15 @@ pub fn get_info(id: String) -> Result<MangaDetail, String> {
         .get(&meta_url)
         .headers(headers_api())
         .send()
-        .map_err(|e| format!("Error de red: {}", e))?
-        .json()
-        .map_err(|e| format!("JSON inválido: {}", e))?;
+        .ok()
+        .and_then(|r| r.json().ok())
+        .unwrap_or(Value::Null);
 
     let data = &meta["data"];
 
-    let title = data["name"].as_str().unwrap_or(&slug).trim().to_string();
-    let description = data["summary"].as_str().unwrap_or("").replace("\\n", "\n");
-    let image = data["cover"].as_str().unwrap_or("").to_string();
+    let mut title = data["name"].as_str().unwrap_or("").trim().to_string();
+    let mut description = data["summary"].as_str().unwrap_or("").replace("\\n", "\n");
+    let mut image = data["cover"].as_str().unwrap_or("").to_string();
     let status = data["status"]["name"].as_str().unwrap_or("Activo").trim().to_string();
     let genres: Vec<String> = data["genres"]
         .as_array()
@@ -357,6 +357,31 @@ pub fn get_info(id: String) -> Result<MangaDetail, String> {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect();
+
+    // Si el API falló (title/image vacíos), extraer del HTML de la página de serie
+    if title.is_empty() || image.is_empty() {
+        let page_url = format!("{}/series/{}", BASE, id);
+        if let Ok(html) = client.get(&page_url).headers(headers_html()).send().and_then(|r| r.text()) {
+            if title.is_empty() {
+                let title_re = Regex::new(r"<title>([^|<]+)").unwrap();
+                if let Some(cap) = title_re.captures(&html) {
+                    title = cap[1].trim().to_string();
+                }
+            }
+            if image.is_empty() {
+                let img_re = Regex::new(r#"og:image" content="([^"]+)""#).unwrap();
+                if let Some(cap) = img_re.captures(&html) {
+                    image = cap[1].to_string();
+                }
+            }
+            if description.is_empty() {
+                let desc_re = Regex::new(r#"name="description" content="([^"]+)""#).unwrap();
+                if let Some(cap) = desc_re.captures(&html) {
+                    description = html_unescape(&cap[1]);
+                }
+            }
+        }
+    }
 
     // ── Capítulos vía API paginada del dashboard ──────────────────────────────
     let mut chapters: Vec<Chapter> = Vec::new();
