@@ -24,25 +24,43 @@
 
   // ── Tauri event listeners ─────────────────────────────────────────────────
   let unlisten = [];
+  let startupTimer = null;
 
   onMount(async () => {
     unlisten.push(await listen('mpv://time-pos', e  => {
       if (loading) { loading = false; loadSubTracks(); }
+      if (startupTimer) { clearTimeout(startupTimer); startupTimer = null; }
       timePos = e.payload ?? 0;
     }));
     unlisten.push(await listen('mpv://duration',  e  => { duration = e.payload ?? 0; }));
     unlisten.push(await listen('mpv://pause',     e  => { paused   = e.payload ?? false; }));
     unlisten.push(await listen('mpv://eof',       () => onclose?.()));
+    unlisten.push(await listen('mpv://error',     e => {
+      error = String(e.payload ?? 'Error en el reproductor');
+      loading = false;
+      if (startupTimer) { clearTimeout(startupTimer); startupTimer = null; }
+    }));
 
     try {
       embedded = await invoke('mpv_open', { path: url });
     } catch (e) {
       error = String(e);
       loading = false;
+      return;
     }
+
+    // Si en 30s no hay un solo time-pos, asumimos que mpv arrancó pero no
+    // pudo abrir el stream (sin peers, codec roto, IPC bloqueada, etc.)
+    startupTimer = setTimeout(() => {
+      if (loading) {
+        error = 'El reproductor no respondió. Verifica que mpv esté instalado y que el torrent tenga peers. Prueba "Externo" para abrirlo en mpv/VLC del sistema.';
+        loading = false;
+      }
+    }, 30_000);
   });
 
   onDestroy(async () => {
+    if (startupTimer) clearTimeout(startupTimer);
     unlisten.forEach(u => u());
     try { await invoke('mpv_close'); } catch {}
   });

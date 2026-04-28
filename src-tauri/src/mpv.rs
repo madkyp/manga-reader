@@ -77,10 +77,12 @@ fn pid_slot() -> &'static Mutex<Option<u32>> {
 
 fn mpv_bin() -> std::path::PathBuf {
     let fname = if cfg!(windows) { "mpv.exe" } else { "mpv" };
+    // 1. Bundle (resource_dir)
     if let Some(dir) = crate::torrent::RESOURCE_DIR.get() {
         let p = dir.join(fname);
         if p.exists() { return p; }
     }
+    // 2. Junto al exe / resources
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             for p in [dir.join(fname), dir.join("resources").join(fname)] {
@@ -88,6 +90,35 @@ fn mpv_bin() -> std::path::PathBuf {
             }
         }
     }
+    // 3. Ubicaciones típicas en Windows
+    #[cfg(windows)]
+    {
+        let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+        for var in &["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"] {
+            if let Ok(pf) = std::env::var(var) {
+                candidates.push(std::path::PathBuf::from(format!(r"{}\mpv\mpv.exe", pf)));
+                candidates.push(std::path::PathBuf::from(format!(r"{}\mpv-x86_64\mpv.exe", pf)));
+            }
+        }
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            candidates.push(std::path::PathBuf::from(format!(r"{}\Programs\mpv\mpv.exe", local)));
+        }
+        if let Ok(home) = std::env::var("USERPROFILE") {
+            candidates.push(std::path::PathBuf::from(format!(r"{}\scoop\apps\mpv\current\mpv.exe", home)));
+        }
+        for c in candidates {
+            if c.exists() { return c; }
+        }
+    }
+    // 4. PATH del sistema
+    if let Ok(paths) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            let c = dir.join(fname);
+            if c.exists() { return c; }
+        }
+    }
+    // No encontrado: devolver el nombre. spawn() fallará con "no encontrado"
+    // y mpv_open transforma el error en mensaje claro al usuario.
     std::path::PathBuf::from(fname)
 }
 
@@ -179,10 +210,19 @@ pub fn mpv_open(path: String, window: tauri::WebviewWindow, app: AppHandle) -> R
         args.push("--osc=yes".into());
     }
 
-    let child = std::process::Command::new(mpv_bin())
+    let bin = mpv_bin();
+    let mut cmd = std::process::Command::new(&bin);
+    #[cfg(windows)]
+    { use std::os::windows::process::CommandExt; cmd.creation_flags(0x08000000); }
+    let child = cmd
         .args(&args)
         .spawn()
-        .map_err(|e| format!("No se pudo lanzar mpv: {}. ¿Está instalado?", e))?;
+        .map_err(|e| {
+            #[cfg(windows)]
+            { format!("No se pudo lanzar mpv ({}). Instálalo desde https://mpv.io/installation/ o usa el botón \"Externo\" para reproducir con VLC/mpv del sistema.", e) }
+            #[cfg(not(windows))]
+            { format!("No se pudo lanzar mpv: {}. ¿Está instalado?", e) }
+        })?;
 
     *pid_slot().lock().unwrap() = Some(child.id());
 
