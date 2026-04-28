@@ -136,8 +136,11 @@ fn get_embed_wid(window: &tauri::WebviewWindow) -> Option<u64> {
         RawWindowHandle::Xlib(h)  => Some(h.window as u64),
         #[cfg(target_os = "linux")]
         RawWindowHandle::Xcb(h)   => Some(h.window.get() as u64),
+        // En Windows el WebView2 ocupa toda el área cliente del HWND principal;
+        // si embedimos mpv ahí queda renderizando detrás (solo audio, sin imagen).
+        // Igual que en Wayland, abrimos ventana propia de mpv.
         #[cfg(target_os = "windows")]
-        RawWindowHandle::Win32(h) => Some(h.hwnd.get() as u64),
+        RawWindowHandle::Win32(_) => None,
         _ => None,
     }
 }
