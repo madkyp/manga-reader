@@ -29,7 +29,12 @@
   let autoLoadingBrowse = false;
   let refreshing = $state(false);
 
-  // ── Búsqueda (pestaña Catálogo, todas las fuentes) ────────────────────────
+  // ── Búsqueda unificada cross-fuente ──────────────────────────────────────
+  let unifiedResults  = $state([]);   // [{ source, label, items }]
+  let unifiedLoading  = $state(false);
+  let unifiedDebounce = null;
+
+  // ── Búsqueda (pestaña Catálogo, fuente individual) ────────────────────────
   let searchQuery   = $state('');
   let searchResults = $state([]);
   let searchLoading = $state(false);
@@ -46,25 +51,27 @@
   let filterPage       = $state(1);
   let filterIndexing   = $state(false); // solo Olympus — indexando ~20s
 
-  let isBrowseTab = $derived($currentTab === 'browse');
+  let isBrowseTab  = $derived($currentTab === 'browse');
+  let isAllSources = $derived($currentSource === 'all');
 
   // Solo Olympus, Cerberus y Taurus tienen filtro de género
   let supportsGenres = $derived(
-    isBrowseTab && ['olympus', 'cerberus', 'taurus'].includes($currentSource)
+    isBrowseTab && !isAllSources && ['olympus', 'cerberus', 'taurus'].includes($currentSource)
   );
 
   let isGenreActive = $derived(supportsGenres && selectedGenres.size > 0);
 
   // Search activa solo cuando no hay filtro de género
   let isSearchActive = $derived(
-    isBrowseTab && searchQuery.trim().length > 0 && !isGenreActive
+    isBrowseTab && !isAllSources && searchQuery.trim().length > 0 && !isGenreActive
   );
 
   // Placeholder del input según fuente
   let searchPlaceholder = $derived(
-    $currentSource === 'olympus'      ? 'Buscar en Olympus…'
-    : $currentSource === 'cerberus'   ? 'Buscar en Cerberus Scans…'
-    : $currentSource === 'taurus'     ? 'Buscar en Taurus Scan…'
+    isAllSources                          ? 'Buscar en todas las fuentes…'
+    : $currentSource === 'olympus'        ? 'Buscar en Olympus…'
+    : $currentSource === 'cerberus'       ? 'Buscar en Cerberus Scans…'
+    : $currentSource === 'taurus'         ? 'Buscar en Taurus Scan…'
     : 'Buscar en Leer Capitulo…'
   );
 
@@ -72,23 +79,41 @@
   function onSearchInput(e) {
     searchQuery = e.target.value;
     clearTimeout(searchDebounce);
+    clearTimeout(unifiedDebounce);
     if (searchQuery.trim().length === 0) {
       searchResults = [];
+      unifiedResults = [];
       if (isGenreActive) { filterPage = 1; applyFilter(1); }
       return;
     }
-    searchDebounce = setTimeout(() => {
-      if (isGenreActive) { applyFilter(1); }
-      else { doSearch(searchQuery.trim()); }
-    }, 400);
+    if (isAllSources) {
+      unifiedDebounce = setTimeout(() => doUnifiedSearch(searchQuery.trim()), 400);
+    } else {
+      searchDebounce = setTimeout(() => {
+        if (isGenreActive) { applyFilter(1); }
+        else { doSearch(searchQuery.trim()); }
+      }, 400);
+    }
+  }
+
+  async function doUnifiedSearch(q) {
+    unifiedLoading = true;
+    try {
+      unifiedResults = await invoke('unified_search', { query: q });
+    } catch (e) {
+      console.error('Error en búsqueda unificada:', e);
+      unifiedResults = [];
+    } finally {
+      unifiedLoading = false;
+    }
   }
 
   async function doSearch(q) {
     searchLoading = true;
     try {
       const cmd =
-        $currentSource === 'cerberus'     ? 'cerberus_search'
-        : $currentSource === 'taurus'     ? 'taurus_search'
+        $currentSource === 'cerberus'       ? 'cerberus_search'
+        : $currentSource === 'taurus'       ? 'taurus_search'
         : $currentSource === 'leercapitulo' ? 'leercapitulo_search'
         : 'olympus_search';
       const data = await invoke(cmd, { query: q });
@@ -104,7 +129,9 @@
   function clearSearch() {
     searchQuery = '';
     searchResults = [];
+    unifiedResults = [];
     clearTimeout(searchDebounce);
+    clearTimeout(unifiedDebounce);
     if (isGenreActive) applyFilter(1);
   }
 
@@ -276,6 +303,11 @@
 
   async function changeSource(source) {
     clearSearch(); clearGenres();
+    if (source === 'all') {
+      currentSource.set('all');
+      currentTab.set('browse');
+      return;
+    }
     switchSource(source);
     await tick();
     if ($latestItems.length === 0) {
@@ -290,6 +322,7 @@
   <!-- Selector de fuente -->
   <div class="sources">
     {#each [
+      { id: 'all',          label: '🔍 Todas' },
       { id: 'olympus',      label: 'Olympus' },
       { id: 'cerberus',     label: 'CerberusScan' },
       { id: 'taurus',       label: 'TaurusScan' },
@@ -395,7 +428,32 @@
     </div>
   {/if}
 
-  {#if $currentTab === 'latest'}
+  {#if isAllSources}
+    <!-- ── Modo búsqueda unificada (todas las fuentes) ───────────────────── -->
+    <div class="grid-wrap">
+      {#if searchQuery.trim().length === 0}
+        <p class="status-msg dim">Escribe algo para buscar en las 4 fuentes a la vez</p>
+      {:else if unifiedLoading}
+        <p class="status-msg">Buscando en todas las fuentes…</p>
+      {:else if unifiedResults.length === 0}
+        <p class="status-msg dim">Sin resultados para «{searchQuery}»</p>
+      {:else}
+        {#each unifiedResults as group}
+          <div class="unified-group">
+            <h3 class="unified-label">{group.label}
+              <span class="unified-count">{group.items.length}</span>
+            </h3>
+            <div class="grid">
+              {#each group.items as item (item.id)}
+                <MangaCard {item} onclick={openManga} />
+              {/each}
+            </div>
+          </div>
+        {/each}
+      {/if}
+    </div>
+
+  {:else if $currentTab === 'latest'}
     <div class="grid-wrap">
       {#if $browseError && $latestItems.length === 0}
         <p class="error-msg">⚠ {$browseError}</p>
@@ -814,6 +872,31 @@
     transition: border-color 0.15s, color 0.15s;
   }
   .load-more:hover { border-color: var(--primary); color: var(--primary); }
+
+  /* ── Búsqueda unificada ─────────────────────────────────────────────────── */
+  .unified-group { margin-bottom: 24px; }
+
+  .unified-label {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--primary);
+    margin: 0 0 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .unified-count {
+    background: color-mix(in srgb, var(--primary) 15%, transparent);
+    border: 1px solid color-mix(in srgb, var(--primary) 30%, transparent);
+    color: var(--primary);
+    font-size: 10px;
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-weight: 600;
+  }
 
   .search-count {
     font-size: 11px;

@@ -3,6 +3,7 @@ mod downloader;
 mod vpn;
 mod torrent;
 mod mpv;
+mod anilist;
 
 use serde::Serialize;
 use scraper::olympus::MangaItem;
@@ -268,6 +269,15 @@ pub fn run() {
             mpv::mpv_raw_command,
             mpv::mpv_get_tracks,
             mpv::mpv_set_sub,
+            // Búsqueda unificada cross-fuente
+            scraper::unified::unified_search,
+            // AniList
+            anilist::anilist_save_token,
+            anilist::anilist_get_token,
+            anilist::anilist_clear_token,
+            anilist::anilist_search,
+            anilist::anilist_update_progress,
+            anilist::anilist_get_list,
         ])
         .run(tauri::generate_context!())
         .expect("error al arrancar la aplicación Tauri");

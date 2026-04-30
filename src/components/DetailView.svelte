@@ -1,5 +1,5 @@
 <script>
-  import { currentManga, loadingDetail, selectedManga, openChapter, goBack, library, toggleLibrary, downloadPath } from '../stores/manga.js';
+  import { currentManga, loadingDetail, selectedManga, openChapter, goBack, library, toggleLibrary, downloadPath, autoDownloadConfig, toggleAutoDownload, anilistMap, setAniListId } from '../stores/manga.js';
   import { invoke } from '@tauri-apps/api/core';
 
   let synopsisExpanded = $state(false);
@@ -146,6 +146,43 @@
     downloadAllState = downloadAllProgress === chapters.length ? 'done' : 'error';
   }
 
+  // ── AniList ────────────────────────────────────────────────────────────────
+  let anilistSearching = $state(false);
+  let anilistMatches   = $state([]);
+  let anilistShowPick  = $state(false);
+  let anilistSyncing   = $state(false);
+
+  async function openAniListPicker() {
+    if (!$currentManga) return;
+    anilistShowPick  = !anilistShowPick;
+    if (!anilistShowPick || anilistMatches.length > 0) return;
+    anilistSearching = true;
+    try {
+      anilistMatches = await invoke('anilist_search', { title: $currentManga.title });
+    } catch { anilistMatches = []; }
+    finally { anilistSearching = false; }
+  }
+
+  function pickAniList(match) {
+    setAniListId($currentManga.id, match.id);
+    anilistShowPick = false;
+    anilistMatches  = [];
+  }
+
+  async function syncAniList() {
+    const manga   = $currentManga;
+    const aniId   = $anilistMap[manga?.id];
+    if (!manga || !aniId) return;
+    anilistSyncing = true;
+    // Usa el índice del capítulo más reciente leído (readSet)
+    const chapters = manga.chapters ?? [];
+    const readCount = chapters.filter(c => readSet.has(c.id)).length;
+    try {
+      await invoke('anilist_update_progress', { mediaId: aniId, progress: readCount });
+    } catch (e) { console.error('AniList sync error:', e); }
+    finally { anilistSyncing = false; }
+  }
+
   function statusColor(status) {
     const s = (status || '').toLowerCase();
     if (s.includes('activo'))     return 'var(--green)';
@@ -204,19 +241,81 @@
             </div>
           {/if}
 
-          <!-- Botón biblioteca -->
+          <!-- Botón biblioteca + controles extra -->
           {#if $currentManga}
-            {@const inLib = $library.some(e => e.id === $currentManga.id)}
-            <button
-              class="btn-library"
-              class:in-library={inLib}
-              onclick={() => toggleLibrary($currentManga)}
-            >
-              <svg viewBox="0 0 24 24" fill={inLib ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
-              </svg>
-              {inLib ? 'En tu biblioteca' : 'Añadir a biblioteca'}
-            </button>
+            {@const inLib    = $library.some(e => e.id === $currentManga.id)}
+            {@const aniId    = $anilistMap[$currentManga.id]}
+            {@const autoDl   = $autoDownloadConfig[$currentManga.id]}
+            <div class="detail-actions">
+              <button
+                class="btn-library"
+                class:in-library={inLib}
+                onclick={() => toggleLibrary($currentManga)}
+              >
+                <svg viewBox="0 0 24 24" fill={inLib ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+                </svg>
+                {inLib ? 'En tu biblioteca' : 'Añadir a biblioteca'}
+              </button>
+
+              {#if inLib}
+                <!-- Auto-descarga toggle -->
+                <button
+                  class="btn-mini"
+                  class:btn-mini-on={autoDl}
+                  onclick={() => toggleAutoDownload($currentManga.id)}
+                  title={autoDl ? 'Auto-descarga activada' : 'Activar auto-descarga'}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="7 10 12 15 17 10"/>
+                    <line x1="12" y1="15" x2="12" y2="3"/>
+                  </svg>
+                  {autoDl ? 'Auto ✓' : 'Auto-dl'}
+                </button>
+
+                <!-- AniList link/sync -->
+                <div class="anilist-wrap">
+                  <button
+                    class="btn-mini"
+                    class:btn-mini-on={!!aniId}
+                    onclick={openAniListPicker}
+                    title={aniId ? `AniList ID: ${aniId}` : 'Vincular con AniList'}
+                  >
+                    AL {aniId ? '✓' : '+'}
+                  </button>
+                  {#if aniId}
+                    <button
+                      class="btn-mini"
+                      class:btn-mini-loading={anilistSyncing}
+                      onclick={syncAniList}
+                      title="Sincronizar progreso con AniList"
+                      disabled={anilistSyncing}
+                    >
+                      {anilistSyncing ? '…' : '↑ Sync'}
+                    </button>
+                  {/if}
+
+                  {#if anilistShowPick}
+                    <div class="anilist-picker">
+                      {#if anilistSearching}
+                        <p class="al-loading">Buscando en AniList…</p>
+                      {:else if anilistMatches.length === 0}
+                        <p class="al-loading">Sin resultados</p>
+                      {:else}
+                        {#each anilistMatches as m}
+                          <button class="al-match" onclick={() => pickAniList(m)}>
+                            {#if m.cover}<img src={m.cover} alt="" class="al-thumb" />{/if}
+                            <span class="al-title">{m.title}</span>
+                            <span class="al-prog">{m.progress} leídos</span>
+                          </button>
+                        {/each}
+                      {/if}
+                    </div>
+                  {/if}
+                </div>
+              {/if}
+            </div>
           {/if}
         </div>
       </div>
@@ -449,6 +548,41 @@
   .btn-library svg { width: 14px; height: 14px; flex-shrink: 0; }
   .btn-library:hover { background: var(--bg-card-high); color: var(--text); border-color: var(--primary); }
   .btn-library.in-library { color: var(--primary); border-color: var(--primary); background: rgba(245,158,11,0.08); }
+
+  .detail-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+
+  .btn-mini {
+    display: flex; align-items: center; gap: 4px;
+    padding: 5px 10px; border-radius: 7px;
+    border: 1px solid var(--outline-dim); background: var(--bg-card);
+    color: var(--text-muted); font-size: 10px; font-weight: 700;
+    cursor: pointer; white-space: nowrap;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .btn-mini:hover { color: var(--text); border-color: var(--outline); }
+  .btn-mini.btn-mini-on { color: var(--green, #4ade80); border-color: var(--green, #4ade80); background: rgba(74,222,128,0.08); }
+  .btn-mini.btn-mini-loading { opacity: 0.6; cursor: default; }
+
+  .anilist-wrap { position: relative; display: flex; gap: 6px; align-items: center; }
+
+  .anilist-picker {
+    position: absolute; top: calc(100% + 6px); left: 0; z-index: 300;
+    background: var(--bg-card); border: 1px solid var(--outline);
+    border-radius: 10px; min-width: 220px; max-width: 280px;
+    max-height: 260px; overflow-y: auto;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    padding: 6px 0;
+  }
+  .al-loading { padding: 12px; font-size: 12px; color: var(--text-muted); text-align: center; }
+  .al-match {
+    display: flex; align-items: center; gap: 8px;
+    width: 100%; padding: 6px 10px; border: none; background: none;
+    cursor: pointer; text-align: left; transition: background 0.1s;
+  }
+  .al-match:hover { background: var(--bg); }
+  .al-thumb { width: 32px; height: 44px; object-fit: cover; border-radius: 4px; flex-shrink: 0; }
+  .al-title { flex: 1; font-size: 11px; color: var(--text); line-height: 1.3; }
+  .al-prog { font-size: 10px; color: var(--text-muted); white-space: nowrap; }
 
   .strip {
     display: flex;

@@ -2,6 +2,42 @@ import { writable, derived, get } from 'svelte/store';
 import { invoke } from '@tauri-apps/api/core';
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 
+// ── Auto-descarga ─────────────────────────────────────────────────────────────
+// { [mangaId]: true } — mangas con auto-descarga activada
+function loadAutoDownloadConfig() {
+    try { return JSON.parse(localStorage.getItem('foundry_auto_dl') || '{}'); } catch { return {}; }
+}
+function saveAutoDownloadConfig(c) {
+    try { localStorage.setItem('foundry_auto_dl', JSON.stringify(c)); } catch {}
+}
+export const autoDownloadConfig = writable(loadAutoDownloadConfig());
+
+export function toggleAutoDownload(mangaId) {
+    autoDownloadConfig.update(cfg => {
+        const next = { ...cfg, [mangaId]: !cfg[mangaId] };
+        saveAutoDownloadConfig(next);
+        return next;
+    });
+}
+
+// ── AniList — mapeo local ID → AniList media_id ───────────────────────────────
+// { [mangaId]: anilistId }
+function loadAniListMap() {
+    try { return JSON.parse(localStorage.getItem('foundry_anilist_map') || '{}'); } catch { return {}; }
+}
+function saveAniListMap(m) {
+    try { localStorage.setItem('foundry_anilist_map', JSON.stringify(m)); } catch {}
+}
+export const anilistMap = writable(loadAniListMap());
+
+export function setAniListId(mangaId, anilistId) {
+    anilistMap.update(m => {
+        const next = { ...m, [mangaId]: anilistId };
+        saveAniListMap(next);
+        return next;
+    });
+}
+
 // ── Ruta de descarga ──────────────────────────────────────────────────────────
 function loadDownloadPath() {
     try { return localStorage.getItem('foundry_dl_path') || ''; } catch { return ''; }
@@ -132,6 +168,17 @@ export async function checkNotifications(force = false) {
                         item.title,
                         `Nuevo capítulo disponible: ${first.title || 'Cap. nuevo'}`
                     );
+                    // Auto-descarga si está activada para este manga
+                    const autoDl = loadAutoDownloadConfig();
+                    if (autoDl[item.id]) {
+                        invoke('download_chapter', {
+                            mangaId:      item.id,
+                            mangaTitle:   item.title || '',
+                            chapterId:    first.id,
+                            chapterTitle: first.title || '',
+                            downloadPath: null,
+                        }).catch(e => console.warn('[auto-dl]', item.title, e));
+                    }
                 } else {
                     state[item.id] = { ...prev, checkedAt: new Date().toISOString() };
                 }

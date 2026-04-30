@@ -124,12 +124,46 @@
 
   const APP_VERSION = '0.1.0';
 
+  // ── AniList ───────────────────────────────────────────────────────────────
+  let anilistToken   = $state('');
+  let anilistSaved   = $state(false);
+  let anilistChecking = $state(false);
+  let anilistConnected = $state(false);
+  let anilistImporting = $state(false);
+  let anilistImportDone = $state(false);
+
+  async function loadAniListToken() {
+    try {
+      const t = await invoke('anilist_get_token');
+      anilistToken = t ?? '';
+      anilistConnected = !!t;
+    } catch { anilistConnected = false; }
+  }
+
+  async function saveAniListToken() {
+    anilistChecking = true;
+    try {
+      await invoke('anilist_save_token', { token: anilistToken.trim() });
+      anilistConnected = !!anilistToken.trim();
+      anilistSaved = true;
+      setTimeout(() => anilistSaved = false, 2000);
+    } catch (e) { console.error(e); }
+    finally { anilistChecking = false; }
+  }
+
+  async function clearAniListToken() {
+    await invoke('anilist_clear_token');
+    anilistToken     = '';
+    anilistConnected = false;
+  }
+
   // ── Autostart ──────────────────────────────────────────────────────────────
   let autostart = $state(false);
 
   onMount(async () => {
     VPN_LIST.filter(v => v.cli).forEach(v => refreshVpnStatus(v.id));
     try { autostart = await isEnabled(); } catch {}
+    await loadAniListToken();
   });
 
   async function toggleAutostart() {
@@ -381,6 +415,48 @@
       {/each}
     </section>
 
+    <!-- ── AniList ──────────────────────────────────────────────────────── -->
+    <section class="section">
+      <h2 class="section-title">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
+        AniList
+        {#if anilistConnected}
+          <span class="al-badge-connected">Conectado</span>
+        {/if}
+      </h2>
+
+      <p class="section-desc">
+        Genera un token en <strong>anilist.co → Perfil → Ajustes → Desarrollador → Token de acceso personal</strong>.
+        Úsalo para sincronizar el progreso de lectura.
+      </p>
+
+      <div class="al-token-row">
+        <input
+          class="al-token-input"
+          type="password"
+          placeholder="Token de acceso personal de AniList…"
+          bind:value={anilistToken}
+        />
+        <button
+          class="btn-save"
+          class:saved={anilistSaved}
+          onclick={saveAniListToken}
+          disabled={anilistChecking || !anilistToken.trim()}
+        >
+          {anilistSaved ? '✓ Guardado' : anilistChecking ? '…' : 'Guardar'}
+        </button>
+        {#if anilistConnected}
+          <button class="btn-danger-sm" onclick={clearAniListToken}>Desconectar</button>
+        {/if}
+      </div>
+
+      {#if anilistConnected}
+        <p class="al-hint">
+          En cada manga de tu biblioteca encontrarás los botones <strong>AL +</strong> (vincular) y <strong>↑ Sync</strong> (sincronizar progreso).
+        </p>
+      {/if}
+    </section>
+
     <!-- ── Sistema ───────────────────────────────────────────────────────── -->
     <section class="section">
       <h2 class="section-title">
@@ -468,6 +544,43 @@
     margin: 0;
   }
   .section-title svg { width: 14px; height: 14px; flex-shrink: 0; }
+
+  /* ── AniList ── */
+  .al-badge-connected {
+    font-size: 10px; font-weight: 700; padding: 1px 8px; border-radius: 10px;
+    background: rgba(74,222,128,0.12); color: var(--green, #4ade80);
+    border: 1px solid rgba(74,222,128,0.3);
+  }
+  .section-desc {
+    font-size: 11px; color: var(--text-muted); margin: 0 0 10px; line-height: 1.5;
+  }
+  .al-token-row {
+    display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+  }
+  .al-token-input {
+    flex: 1; min-width: 160px; padding: 7px 10px;
+    background: var(--bg); border: 1px solid var(--outline-dim);
+    border-radius: 7px; color: var(--text); font-size: 12px; outline: none;
+    transition: border-color 0.15s;
+  }
+  .al-token-input:focus { border-color: var(--primary); }
+  .btn-save {
+    padding: 7px 14px; border-radius: 7px; border: 1px solid var(--primary);
+    background: color-mix(in srgb, var(--primary) 15%, transparent);
+    color: var(--primary); font-size: 12px; font-weight: 600; cursor: pointer;
+    white-space: nowrap; transition: background 0.15s;
+  }
+  .btn-save:hover { background: color-mix(in srgb, var(--primary) 25%, transparent); }
+  .btn-save:disabled { opacity: 0.5; cursor: default; }
+  .btn-save.saved { color: var(--green, #4ade80); border-color: var(--green, #4ade80); }
+  .btn-danger-sm {
+    padding: 7px 12px; border-radius: 7px; border: 1px solid rgba(248,113,113,0.4);
+    background: rgba(248,113,113,0.08); color: var(--red, #f87171);
+    font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
+  }
+  .al-hint {
+    font-size: 11px; color: var(--text-muted); margin: 8px 0 0; line-height: 1.5;
+  }
 
   /* ── Fila ── */
   .row {

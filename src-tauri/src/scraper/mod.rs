@@ -6,6 +6,7 @@ pub mod leercapitulo; // LeerCapitulo  — leercapitulo.co
 pub mod animeflv;     // AnimeFLV      — www3.animeflv.net
 pub mod nyaa;         // Nyaa.si       — torrents de anime
 pub mod kitsu;        // Kitsu.io      — metadatos de anime
+pub mod unified;      // Búsqueda cross-fuente en paralelo
 
 pub fn urlencode(s: &str) -> String {
     s.chars().map(|c| match c {
