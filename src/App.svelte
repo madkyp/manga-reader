@@ -3,6 +3,7 @@
   import Sidebar    from './components/Sidebar.svelte';
   import HomeView   from './components/HomeView.svelte';
   import BrowseView from './components/BrowseView.svelte';
+  import MangasView from './components/MangasView.svelte';
   import DetailView from './components/DetailView.svelte';
   import ReaderView from './components/ReaderView.svelte';
   import SettingsView from './components/SettingsView.svelte';
@@ -40,6 +41,8 @@
       <HomeView />
     {:else if $currentView === 'browse'}
       <BrowseView />
+    {:else if $currentView === 'mangas'}
+      <MangasView />
     {:else if $currentView === 'detail'}
       <DetailView />
     {:else if $currentView === 'reader'}

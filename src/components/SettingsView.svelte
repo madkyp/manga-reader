@@ -81,7 +81,7 @@
   let showProgress   = $state(prefs.showProgress   ?? true);   // barra de progreso
 
   // Descargas
-  let dlFormat       = $state(prefs.dlFormat       ?? 'pdf');  // 'pdf' | 'images'
+  let dlFormat       = $state(prefs.dlFormat === 'cbz' ? 'cbz' : 'pdf');  // 'pdf' | 'cbz'
   let confirmDlAll   = $state(prefs.confirmDlAll   ?? false);  // confirmar descargar todo
 
   async function pickDownloadFolder() {
@@ -256,7 +256,7 @@
       <div class="row">
         <div class="row-info">
           <span class="row-label">Formato de descarga</span>
-          <span class="row-desc">PDF con todas las páginas o imágenes sueltas</span>
+          <span class="row-desc">PDF (un documento) o CBZ (cómic, abre en cualquier lector)</span>
         </div>
         <div class="seg-ctrl">
           <button
@@ -266,9 +266,9 @@
           >PDF</button>
           <button
             class="seg-btn"
-            class:active={dlFormat === 'images'}
-            onclick={() => dlFormat = 'images'}
-          >Imágenes</button>
+            class:active={dlFormat === 'cbz'}
+            onclick={() => dlFormat = 'cbz'}
+          >CBZ</button>
         </div>
       </div>
 
@@ -501,6 +501,7 @@
     overflow-y: auto;
     display: flex;
     justify-content: center;
+    align-items: flex-start;   /* no estirar el panel a la altura de la ventana */
     padding: 32px 16px 48px;
     background: var(--bg);
   }
@@ -528,6 +529,7 @@
     border-radius: 12px;
     overflow: hidden;
     margin-bottom: 4px;
+    flex-shrink: 0;   /* mantener altura natural; el scroll lo hace .settings-wrap */
   }
 
   .section-title {
@@ -587,17 +589,22 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 16px;
+    flex-wrap: wrap;
+    gap: 8px 16px;
     padding: 13px 16px;
     border-bottom: 1px solid var(--outline-dim);
   }
   .row:last-child { border-bottom: none; }
+  /* El control (toggle, segmentado, botón) queda a la derecha aunque la fila
+     haga wrap en pantallas estrechas, en vez de cortarse. */
+  .row > :not(.row-info) { margin-left: auto; flex-shrink: 0; }
 
   .row-info {
     display: flex;
     flex-direction: column;
     gap: 2px;
     min-width: 0;
+    flex: 1 1 200px;
   }
   .row-label {
     font-size: 13px;

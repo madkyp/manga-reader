@@ -7,6 +7,7 @@
   const mainItems = [
     { id: 'home',          label: 'Inicio'         },
     { id: 'browse',        label: 'Manwhas'        },
+    { id: 'mangas',        label: 'Mangas'         },
     { id: 'anime',         label: 'Anime'          },
     { id: 'library',       label: 'Biblioteca'     },
     { id: 'notifications', label: 'Notificaciones' },
@@ -19,6 +20,7 @@
 
   let activeSection = $derived(
     $currentView === 'detail' || $currentView === 'reader' ? 'browse' :
+    $currentView === 'mangas' ? 'mangas' :
     $currentView === 'anime' ? 'anime' :
     $currentView === 'home' ? 'home' :
     $currentView === 'library' ? 'library' :
@@ -41,7 +43,9 @@
           {#if item.id === 'home'}
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
           {:else if item.id === 'browse'}
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2h18"/><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M3 22h18"/></svg>
+          {:else if item.id === 'mangas'}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
           {:else if item.id === 'anime'}
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
           {:else if item.id === 'library'}

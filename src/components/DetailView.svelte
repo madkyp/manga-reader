@@ -1,5 +1,5 @@
 <script>
-  import { currentManga, loadingDetail, selectedManga, openChapter, goBack, library, toggleLibrary, downloadPath, autoDownloadConfig, toggleAutoDownload, anilistMap, setAniListId } from '../stores/manga.js';
+  import { currentManga, loadingDetail, selectedManga, openChapter, goBack, library, toggleLibrary, downloadPath, downloadFormat, autoDownloadConfig, toggleAutoDownload, anilistMap, setAniListId } from '../stores/manga.js';
   import { invoke } from '@tauri-apps/api/core';
 
   let synopsisExpanded = $state(false);
@@ -97,6 +97,7 @@
         chapterId:    chapter.id,
         chapterTitle: chapter.title,
         downloadPath: $downloadPath || null,
+        format:       downloadFormat(),
       });
       chapterState = { ...chapterState, [chapter.id]: 'done' };
       downloadedSet = new Set([...downloadedSet, chapter.id]);

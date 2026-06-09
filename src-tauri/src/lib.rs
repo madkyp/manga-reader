@@ -226,6 +226,12 @@ pub fn run() {
             scraper::leercapitulo::leercapitulo_info,
             scraper::leercapitulo::leercapitulo_pages,
             scraper::leercapitulo::leercapitulo_search,
+
+            scraper::mangadex::mangadex_latest,
+            scraper::mangadex::mangadex_browse,
+            scraper::mangadex::mangadex_info,
+            scraper::mangadex::mangadex_pages,
+            scraper::mangadex::mangadex_search,
             // Descargas
             downloader::download_chapter,
             // VPN

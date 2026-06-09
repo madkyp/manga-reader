@@ -3,6 +3,7 @@ pub mod olympus;      // OlympusScans — olympusbiblioteca.com
 pub mod cerberus;     // CerberusScans — legionscans.com
 pub mod taurus;       // TaurusScan    — lectortaurus.com
 pub mod leercapitulo; // LeerCapitulo  — leercapitulo.co
+pub mod mangadex;     // MangaDex      — api.mangadex.org (manga japonés en ES)
 pub mod animeflv;     // AnimeFLV      — www3.animeflv.net
 pub mod nyaa;         // Nyaa.si       — torrents de anime
 pub mod kitsu;        // Kitsu.io      — metadatos de anime
