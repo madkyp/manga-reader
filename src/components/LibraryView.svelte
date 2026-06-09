@@ -1,7 +1,18 @@
 <script>
   import { get } from 'svelte/store';
-  import { library, toggleLibrary, openManga } from '../stores/manga.js';
+  import { library, toggleLibrary, openManga, pendingMangadex, currentView } from '../stores/manga.js';
   import { animeLibrary, toggleAnimeLibrary, openAnimeFromLibrary } from '../stores/anime.js';
+
+  // Los items de MangaDex se abren en la sección Mangas (su propia vista);
+  // el resto (manhwa) usan el detalle compartido.
+  function openMangaItem(item) {
+    if (item.id?.startsWith('mangadex-')) {
+      pendingMangadex.set(item);
+      currentView.set('mangas');
+    } else {
+      openManga(item);
+    }
+  }
 
   let tab      = $state('manga'); // 'manga' | 'anime'
   let animeTab = $state('flv');   // 'flv' | 'kitsu'
@@ -131,7 +142,7 @@
       <div class="grid">
         {#each $library as item (item.id)}
           <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-          <div class="card" onclick={() => openManga(item)}>
+          <div class="card" onclick={() => openMangaItem(item)}>
             <div class="cover-wrap">
               <img class="cover" src={item.image} alt={item.title} loading="lazy"
                 onerror={(e) => e.target.src='https://picsum.photos/120/170'} />

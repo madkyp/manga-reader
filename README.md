@@ -49,6 +49,18 @@ Para desinstalar:
 ./install-linux.sh --uninstall
 ```
 
+### Actualizar
+
+El script `update-linux.sh` trae los últimos cambios de Git, recompila la app **solo si hay novedades** y reinstala el binario, los iconos y la entrada de menú. No reinstala las dependencias del sistema.
+
+```bash
+./update-linux.sh           # actualiza a la última versión
+./update-linux.sh --check   # solo comprueba si hay actualizaciones (no compila)
+./update-linux.sh --force   # reinstala aunque ya estés al día
+```
+
+> Si la app estaba abierta, ciérrala y vuelve a abrirla para aplicar la actualización.
+
 ### Distros soportadas
 
 | Distro | Gestor |

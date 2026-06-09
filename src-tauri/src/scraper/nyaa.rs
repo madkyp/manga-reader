@@ -273,11 +273,64 @@ fn fetch_ats_query(q: &str, re_sea: &Regex, re_abs: &Regex) -> (std::collections
     (sea, abs)
 }
 
+// Lanza una query al RSS de Nyaa.si y devuelve (season_map, abs_max).
+// A diferencia del feed JSON de AnimeToSho (limitado a 20 resultados, que para
+// series en emisión solo cubre los episodios más bajos), el RSS de Nyaa devuelve
+// hasta 75 entradas → cobertura completa de episodios.
+fn fetch_nyaa_query(q: &str, re_sea: &Regex, re_abs: &Regex) -> (std::collections::HashMap<u32, u32>, u32) {
+    use std::collections::HashMap;
+    let client  = super::shared_client();
+    let encoded = urlencoding::encode(q).into_owned();
+    let url     = format!("https://nyaa.si/?page=rss&q={}&c=1_2&f=0", encoded);
+
+    let text = match client.get(&url)
+        .header("User-Agent", "Mozilla/5.0 (compatible; RSS reader)")
+        .send()
+    {
+        Ok(r) if r.status().is_success() => match r.text() { Ok(t) => t, Err(_) => return (HashMap::new(), 0) },
+        _ => return (HashMap::new(), 0),
+    };
+
+    let re_title = Regex::new(r"<title>(?:<!\[CDATA\[(.*?)\]\]>|([^<]*))</title>").unwrap();
+    let mut sea: HashMap<u32, u32> = HashMap::new();
+    let mut abs: u32 = 0;
+    for cap in re_title.captures_iter(&text) {
+        let t = cap.get(1).or_else(|| cap.get(2)).map(|m| m.as_str()).unwrap_or("");
+        for c in re_sea.captures_iter(t) {
+            let s: u32 = c[1].parse().unwrap_or(0);
+            let e: u32 = c[2].parse().unwrap_or(0);
+            if s > 0 && e > 0 { let m = sea.entry(s).or_insert(0); if e > *m { *m = e; } }
+        }
+        for c in re_abs.captures_iter(t) {
+            let n: u32 = c[1].parse().unwrap_or(0);
+            if n > abs { abs = n; }
+        }
+    }
+    (sea, abs)
+}
+
+// Genera variantes de notación de temporada para un título. Kitsu usa
+// "2nd Season" / "Season 2", pero muchos grupos de fansub en Nyaa usan "S2".
+// Devuelve p.ej. ["<base> S2"] para "<base> 2nd Season". La variante "SN"
+// solo casa torrents que contienen ese token → no contamina con la temporada 1.
+fn season_variants(title: &str) -> Vec<String> {
+    let re = Regex::new(r"(?i)\s+(?:(\d+)(?:st|nd|rd|th)?\s+season|season\s+(\d+))\s*$").unwrap();
+    if let Some(cap) = re.captures(title) {
+        let n: u32 = cap.get(1).or_else(|| cap.get(2))
+            .and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
+        let base = title[..cap.get(0).unwrap().start()].trim();
+        if n >= 2 && !base.is_empty() {
+            return vec![format!("{} S{}", base, n)];
+        }
+    }
+    vec![]
+}
+
 /// Lista episodios disponibles en AnimeToSho agrupados por temporada.
 /// Todas las queries se lanzan en paralelo; se usa el resultado de mayor
 /// prioridad que devuelva datos. Caché de 10 min por título.
 #[tauri::command]
-pub fn nyaa_episode_list(title: String) -> Result<Vec<EpisodeGroup>, String> {
+pub fn nyaa_episode_list(title: String, title_romaji: Option<String>) -> Result<Vec<EpisodeGroup>, String> {
     use std::collections::HashMap;
 
     // ── Caché ─────────────────────────────────────────────────────────────────
@@ -303,29 +356,64 @@ pub fn nyaa_episode_list(title: String) -> Result<Vec<EpisodeGroup>, String> {
         } else { None }
     } else { None };
 
-    let mut queries: Vec<String> = vec![
-        title.clone(),
-        format!("{} 1080p", title),
-        format!("{} 720p", title),
-    ];
-    if let Some(ref s) = short_sub { queries.push(s.clone()); queries.push(format!("{} 1080p", s)); }
-    if title.contains(':') {
-        let base = title.splitn(2, ':').next().unwrap_or("").trim().to_string();
-        queries.push(base.clone());
-        queries.push(format!("{} 1080p", base));
+    // Títulos base distintos: el canónico y el romaji (en_jp), que es como los
+    // grupos de fansub nombran muchos animes (p.ej. el inglés "Daemons of the
+    // Shadow Realm" está en Nyaa como "Yomi no Tsugai").
+    let mut base_titles: Vec<String> = vec![title.clone()];
+    if let Some(ref r) = title_romaji {
+        if !r.is_empty() && !r.eq_ignore_ascii_case(&title) { base_titles.push(r.clone()); }
+    }
+    // Variantes de notación de temporada ("2nd Season" → "S2").
+    let season_vars: Vec<String> = base_titles.iter()
+        .flat_map(|t| season_variants(t)).collect();
+
+    let push_uniq = |v: &mut Vec<String>, s: String| {
+        if !s.is_empty() && !v.iter().any(|x| x.eq_ignore_ascii_case(&s)) { v.push(s); }
+    };
+
+    // Títulos primarios para Nyaa RSS (cobertura completa, sin sufijos de calidad).
+    let mut nyaa_titles: Vec<String> = Vec::new();
+    for t in base_titles.iter().chain(season_vars.iter()) {
+        push_uniq(&mut nyaa_titles, t.clone());
     }
 
-    // ── Todas las queries en paralelo ─────────────────────────────────────────
-    let results: Vec<(HashMap<u32, u32>, u32)> = std::thread::scope(|s| {
-        queries.iter()
-            .map(|q| s.spawn(|| fetch_ats_query(q, &re_sea, &re_abs)))
-            .collect::<Vec<_>>()
-            .into_iter()
-            .map(|h| h.join().unwrap_or((HashMap::new(), 0)))
-            .collect()
-    });
+    // Queries para AnimeToSho (con sufijos de resolución para reducir variantes).
+    let mut queries: Vec<String> = Vec::new();
+    push_uniq(&mut queries, title.clone());
+    push_uniq(&mut queries, format!("{} 1080p", title));
+    push_uniq(&mut queries, format!("{} 720p", title));
+    if let Some(ref r) = title_romaji {
+        if !r.eq_ignore_ascii_case(&title) { push_uniq(&mut queries, r.clone()); }
+    }
+    for s in &season_vars { push_uniq(&mut queries, s.clone()); }
+    if let Some(ref s) = short_sub { push_uniq(&mut queries, s.clone()); push_uniq(&mut queries, format!("{} 1080p", s)); }
+    if title.contains(':') {
+        let base = title.splitn(2, ':').next().unwrap_or("").trim().to_string();
+        push_uniq(&mut queries, base.clone());
+        push_uniq(&mut queries, format!("{} 1080p", base));
+    }
 
-    // Prioridad: primer resultado (por orden de query) con season_max;
+    // ── Todas las queries en paralelo (AnimeToSho + Nyaa.si RSS) ───────────────
+    // Nyaa RSS (cobertura completa de episodios) se lanza con cada título primario;
+    // AnimeToSho aporta detección de temporadas en series multi-season.
+    let (results, nyaa_list): (Vec<(HashMap<u32, u32>, u32)>, Vec<(HashMap<u32, u32>, u32)>) =
+        std::thread::scope(|s| {
+            let nyaa_handles: Vec<_> = nyaa_titles.iter()
+                .map(|t| s.spawn(|| fetch_nyaa_query(t, &re_sea, &re_abs)))
+                .collect();
+            let ats_handles: Vec<_> = queries.iter()
+                .map(|q| s.spawn(|| fetch_ats_query(q, &re_sea, &re_abs)))
+                .collect();
+            let ats: Vec<(HashMap<u32, u32>, u32)> = ats_handles.into_iter()
+                .map(|h| h.join().unwrap_or((HashMap::new(), 0)))
+                .collect();
+            let nyaa: Vec<(HashMap<u32, u32>, u32)> = nyaa_handles.into_iter()
+                .map(|h| h.join().unwrap_or((HashMap::new(), 0)))
+                .collect();
+            (ats, nyaa)
+        });
+
+    // Prioridad: primer resultado de AnimeToSho (por orden de query) con season_max;
     // si ninguno tiene, primer resultado con abs_max.
     let mut season_max: HashMap<u32, u32> = HashMap::new();
     let mut abs_max: u32 = 0;
@@ -337,7 +425,26 @@ pub fn nyaa_episode_list(title: String) -> Result<Vec<EpisodeGroup>, String> {
         if abs > 0 && abs_max == 0 { abs_max = abs; }
     }
 
-    let groups = if !season_max.is_empty() {
+    // Fusionar con Nyaa.si RSS quedándonos con el máximo episodio por temporada
+    // (y el máximo absoluto), para no perder episodios que AnimeToSho recorta.
+    for (nyaa_sea, nyaa_abs) in nyaa_list {
+        for (sn, ep) in nyaa_sea {
+            let m = season_max.entry(sn).or_insert(0);
+            if ep > *m { *m = ep; }
+        }
+        if nyaa_abs > abs_max { abs_max = nyaa_abs; }
+    }
+
+    let groups = if season_max.len() == 1 {
+        // Una sola temporada: la numeración por temporada (SxxEyy) y la absoluta
+        // (" - NN") describen los MISMOS episodios con distinta notación. Un grupo
+        // puede usar SxxEyy y estar incompleto mientras otro publica más con
+        // numeración absoluta — tomamos el máximo para no perder episodios.
+        let (&s, &smax) = season_max.iter().next().unwrap();
+        let max_ep = smax.max(abs_max);
+        vec![EpisodeGroup { season: s, episodes: (1..=max_ep).rev().collect() }]
+    } else if !season_max.is_empty() {
+        // Multi-temporada: la numeración absoluta es ambigua → usar solo SxxEyy.
         let mut g: Vec<EpisodeGroup> = season_max.iter()
             .map(|(&s, &max)| EpisodeGroup { season: s, episodes: (1..=max).rev().collect() })
             .collect();

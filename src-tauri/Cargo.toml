@@ -38,6 +38,7 @@ tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 base64 = "0.22"
 printpdf = { version = "0.6", features = ["embedded_images"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 image = { version = "0.24", features = ["webp", "jpeg", "png"] }
 librqbit = { version = "8", features = ["http-api", "tracing-subscriber-utils"] }
 urlencoding = "2"

@@ -85,6 +85,15 @@ function saveLibrary(l) {
 }
 export const library = writable(loadLibrary());
 
+// Item de MangaDex pendiente de abrir desde la Biblioteca → lo recoge MangasView
+export const pendingMangadex = writable(null);
+
+// Formato de descarga elegido en Ajustes ('pdf' | 'cbz')
+export function downloadFormat() {
+    try { return JSON.parse(localStorage.getItem('foundry_prefs') || '{}').dlFormat === 'cbz' ? 'cbz' : 'pdf'; }
+    catch { return 'pdf'; }
+}
+
 export function toggleLibrary(manga) {
     let adding = false;
     library.update(lib => {

@@ -10,6 +10,7 @@ pub struct KitsuAnime {
     pub id:            String,
     pub title:         String,
     pub title_ja:      Option<String>,
+    pub title_romaji:  Option<String>,
     pub image:         String,
     pub cover_image:   Option<String>,
     pub synopsis:      String,
@@ -95,6 +96,11 @@ fn parse_anime(item: &serde_json::Value) -> Option<KitsuAnime> {
     let title_ja = attrs.get("titles")
         .and_then(|t| t.get("ja_jp")).and_then(|v| v.as_str()).map(str::to_string);
 
+    // en_jp = romaji (lo que usan los grupos de fansub en Nyaa, p.ej. "Yomi no Tsugai")
+    let title_romaji = attrs.get("titles")
+        .and_then(|t| t.get("en_jp")).and_then(|v| v.as_str())
+        .map(str::to_string).filter(|s| !s.is_empty());
+
     let image = attrs.get("posterImage")
         .and_then(|p| p.get("medium").or_else(|| p.get("small")).or_else(|| p.get("original")))
         .and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -119,7 +125,7 @@ fn parse_anime(item: &serde_json::Value) -> Option<KitsuAnime> {
         .and_then(|s| s.split('-').next()).and_then(|y| y.parse().ok());
 
     Some(KitsuAnime {
-        id, title, title_ja, image, cover_image,
+        id, title, title_ja, title_romaji, image, cover_image,
         synopsis, anime_type, status,
         episode_count, rating, year,
         genres: vec![],
@@ -149,6 +155,63 @@ pub fn kitsu_browse(sort: Option<String>, page: Option<u32>) -> Result<String, S
 
     let data = json.get("data").and_then(|d| d.as_array())
         .ok_or("Sin data en browse")?;
+    let items: Vec<KitsuAnime> = data.iter().filter_map(parse_anime).collect();
+    let total = json.get("meta").and_then(|m| m.get("count")).and_then(|v| v.as_u64()).unwrap_or(0);
+
+    serde_json::to_string(&KitsuListResult {
+        has_more: (offset as u64 + limit as u64) < total,
+        total, items,
+    }).map_err(|e| e.to_string())
+}
+
+// Devuelve (año, mes) UTC actuales a partir del reloj del sistema, sin chrono.
+// Algoritmo civil-from-days de Howard Hinnant.
+fn current_year_month() -> (i64, u32) {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let days = secs.div_euclid(86_400);
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = y + if m <= 2 { 1 } else { 0 };
+    (year, m as u32)
+}
+
+// Temporada Kitsu (winter/spring/summer/fall) según la convención de anime:
+// winter=Ene–Mar, spring=Abr–Jun, summer=Jul–Sep, fall=Oct–Dic.
+fn current_season() -> (&'static str, i64) {
+    let (year, month) = current_year_month();
+    let season = match month {
+        1..=3   => "winter",
+        4..=6   => "spring",
+        7..=9   => "summer",
+        _       => "fall",
+    };
+    (season, year)
+}
+
+#[tauri::command]
+pub fn kitsu_season(page: Option<u32>) -> Result<String, String> {
+    let page   = page.unwrap_or(1).max(1);
+    let limit  = 20u32;
+    let offset = (page - 1) * limit;
+    let (season, year) = current_season();
+
+    let url = format!(
+        "{}/anime?filter[season]={}&filter[seasonYear]={}&sort=-userCount&page[limit]={}&page[offset]={}&fields[anime]=canonicalTitle,titles,posterImage,coverImage,subtype,showType,status,episodeCount,averageRating,startDate,synopsis",
+        BASE, season, year, limit, offset
+    );
+    let json = kitsu_get_cached(&url)?;
+
+    let data = json.get("data").and_then(|d| d.as_array())
+        .ok_or("Sin data en temporada")?;
     let items: Vec<KitsuAnime> = data.iter().filter_map(parse_anime).collect();
     let total = json.get("meta").and_then(|m| m.get("count")).and_then(|v| v.as_u64()).unwrap_or(0);
 

@@ -226,6 +226,12 @@ pub fn run() {
             scraper::leercapitulo::leercapitulo_info,
             scraper::leercapitulo::leercapitulo_pages,
             scraper::leercapitulo::leercapitulo_search,
+
+            scraper::mangadex::mangadex_latest,
+            scraper::mangadex::mangadex_browse,
+            scraper::mangadex::mangadex_info,
+            scraper::mangadex::mangadex_pages,
+            scraper::mangadex::mangadex_search,
             // Descargas
             downloader::download_chapter,
             // VPN
@@ -235,6 +241,7 @@ pub fn run() {
             // Kitsu.io
             scraper::kitsu::kitsu_browse,
             scraper::kitsu::kitsu_trending,
+            scraper::kitsu::kitsu_season,
             scraper::kitsu::kitsu_search,
             scraper::kitsu::kitsu_detail,
             scraper::kitsu::kitsu_episodes,
