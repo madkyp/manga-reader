@@ -80,6 +80,8 @@
       let json;
       if (tab === 'latest') {
         json = await tauri('kitsu_trending');
+      } else if (tab === 'season') {
+        json = await tauri('kitsu_season', { page: 1 });
       } else {
         const sort = tab === 'explorar' ? 'title' : 'rating';
         json = await tauri('kitsu_browse', { sort, page: 1 });
@@ -95,8 +97,13 @@
     if (loadingMore) return;
     loadingMore = true;
     try {
-      const sort = activeTab === 'explorar' ? 'title' : 'rating';
-      const json = await tauri('kitsu_browse', { sort, page: page + 1 });
+      let json;
+      if (activeTab === 'season') {
+        json = await tauri('kitsu_season', { page: page + 1 });
+      } else {
+        const sort = activeTab === 'explorar' ? 'title' : 'rating';
+        json = await tauri('kitsu_browse', { sort, page: page + 1 });
+      }
       const r = JSON.parse(json);
       items = [...items, ...(r.items ?? [])];
       hasMore = r.has_more ?? false;
@@ -204,7 +211,7 @@
     try {
       const [detailJson, episodesResult] = await Promise.allSettled([
         tauri('kitsu_detail',      { id: item.id }),
-        tauri('nyaa_episode_list', { title: item.title }),
+        tauri('nyaa_episode_list', { title: item.title, titleRomaji: item.title_romaji ?? null }),
       ]);
 
       const base = detailJson.status === 'fulfilled'
@@ -771,6 +778,7 @@
       <button class="btab" class:active={activeTab === 'explorar'}  onclick={() => switchTab('explorar')}>Explorar</button>
     {:else}
       <button class="btab" class:active={activeTab === 'latest'}    onclick={() => switchTab('latest')}>Trending</button>
+      <button class="btab" class:active={activeTab === 'season'}    onclick={() => switchTab('season')}>Temporada</button>
       <button class="btab" class:active={activeTab === 'recientes'} onclick={() => switchTab('recientes')}>Más valorados</button>
       <button class="btab" class:active={activeTab === 'explorar'}  onclick={() => switchTab('explorar')}>Explorar A–Z</button>
     {/if}

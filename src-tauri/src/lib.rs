@@ -235,6 +235,7 @@ pub fn run() {
             // Kitsu.io
             scraper::kitsu::kitsu_browse,
             scraper::kitsu::kitsu_trending,
+            scraper::kitsu::kitsu_season,
             scraper::kitsu::kitsu_search,
             scraper::kitsu::kitsu_detail,
             scraper::kitsu::kitsu_episodes,
