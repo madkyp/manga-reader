@@ -238,12 +238,12 @@ Version=1.0
 Name=$APP_NAME
 GenericName=Manga & Anime
 Comment=$APP_COMMENT
-Exec=$INSTALL_BIN %U
+Exec=env WEBKIT_DISABLE_DMABUF_RENDERER=1 $INSTALL_BIN %U
 Icon=$APP_ID
 Terminal=false
 Categories=AudioVideo;Video;Network;
 StartupNotify=true
-StartupWMClass=TheFoundry App
+StartupWMClass=App
 EOF
     chmod 0644 "$INSTALL_DESKTOP"
 
@@ -266,7 +266,7 @@ EOF
 uninstall() {
     info "Eliminando archivos instalados..."
     rm -fv "$INSTALL_BIN" "$INSTALL_DESKTOP"
-    for size in 32 64 128 256; do
+    for size in 16 32 64 128 256; do
         rm -fv "$INSTALL_ICONS/${size}x${size}/apps/$APP_ID.png"
     done
 
